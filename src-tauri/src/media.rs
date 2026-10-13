@@ -25,6 +25,7 @@ pub fn now_ticks() -> i64 {
     unix + 11_644_473_600 * 10_000_000
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 /// Position right now: SMTC reports where playback was at `last_updated`; while playing,
 /// the time since then has to be added (and clamped to the track length).
 pub fn live_position(position_s: f64, last_updated_ticks: i64, now_ticks: i64, playing: bool, duration_s: f64) -> f64 {

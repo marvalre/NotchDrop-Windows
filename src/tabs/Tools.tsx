@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { Stopwatch, elapsed, pause, start } from "../lib/stopwatch";
 import { copyText } from "../lib/api";
-import { AlarmStore } from "../lib/alarms";
+import { AlarmStore, MAX_ALARMS } from "../lib/alarms";
 import { primeAudio } from "../lib/alarmTone";
 import { preview } from "../lib/clipboard";
 import { stopwatchText } from "../lib/time";
@@ -30,8 +31,10 @@ export function Tools(props: {
   stopRinging: () => void;
   alarmMsg: string | null;
   setAlarmMsg: (m: string | null) => void;
+  stopwatch: Stopwatch;
+  setStopwatch: (s: Stopwatch) => void;
 }) {
-  const { clips, alarms, setAlarms, now, ringing, stopRinging, alarmMsg, setAlarmMsg } = props;
+  const { clips, alarms, setAlarms, now, ringing, stopRinging, alarmMsg, setAlarmMsg, stopwatch, setStopwatch } = props;
   const [copied, setCopied] = useState<number | null>(null);
   const [time, setTime] = useState(() => {
     const d = new Date(Date.now() + 30 * 60_000);
@@ -41,6 +44,7 @@ export function Tools(props: {
   const add = (end: number, minutes: number) => {
     primeAudio();
     stopRinging();
+    if (alarms.items.length >= MAX_ALARMS) { setAlarmMsg(`Ya tienes ${MAX_ALARMS} alarmas; cancela una para poner otra.`); return; }
     setAlarmMsg(null);
     const next = AlarmStore.fromJSON(alarms.toJSON());
     next.add(end, minutes);
@@ -52,15 +56,15 @@ export function Tools(props: {
     setAlarms(next);
   };
 
-  // stopwatch
-  const [swRunning, setSwRunning] = useState(false);
-  const [swElapsed, setSwElapsed] = useState(0);
-  const swStart = useRef(0);
+  // Stopwatch state lives in App so it survives collapsing the island and switching tabs.
+  const [, setTick] = useState(0);
   useEffect(() => {
-    if (!swRunning) return;
-    const id = window.setInterval(() => setSwElapsed(performance.now() - swStart.current), 100);
+    if (!stopwatch.running) return;
+    const id = window.setInterval(() => setTick((n) => n + 1), 100);
     return () => clearInterval(id);
-  }, [swRunning]);
+  }, [stopwatch.running]);
+  const swElapsed = elapsed(stopwatch, Date.now());
+  const swRunning = stopwatch.running;
 
   const count = alarms.items.length;
   const status = ringing ? "✅ ¡ALARMA! — sonando…" : alarmMsg ?? (count === 0 ? "Sin alarma activa" : count === 1 ? "1 alarma activa" : `${count} alarmas activas`);
@@ -125,13 +129,13 @@ export function Tools(props: {
             <button
               className="small-btn"
               onClick={() => {
-                if (swRunning) setSwRunning(false);
-                else { swStart.current = performance.now() - swElapsed; setSwRunning(true); }
+                const t = Date.now();
+                setStopwatch(swRunning ? pause(stopwatch, t) : start(stopwatch, t));
               }}
             >
               {swRunning ? "Pausar" : "Iniciar"}
             </button>
-            <button className="small-btn" onClick={() => { setSwRunning(false); setSwElapsed(0); }}>Reiniciar</button>
+            <button className="small-btn" onClick={() => setStopwatch({ running: false, startedAt: 0, accumulated: 0 })}>Reiniciar</button>
           </div>
         </div>
       </section>

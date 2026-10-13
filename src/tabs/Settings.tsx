@@ -32,7 +32,7 @@ export function Settings({ prefs, setPrefs, clearClips }: { prefs: Prefs; setPre
           <input type="checkbox" checked={prefs.hoverOpen} onChange={(e) => setPrefs({ ...prefs, hoverOpen: e.target.checked })} />
         </label>
         <label className="toggle">
-          <span>Recordar el portapapeles al cerrar la app</span>
+          <span>Recordar el portapapeles al cerrar la app<br /><span className="muted small">Se guarda sin cifrar en esta PC. Las copias de gestores de contraseñas nunca se guardan.</span></span>
           <input type="checkbox" checked={prefs.persistClipboard} onChange={(e) => setPrefs({ ...prefs, persistClipboard: e.target.checked })} />
         </label>
         <div className="row">

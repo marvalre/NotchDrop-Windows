@@ -4,18 +4,35 @@ import { load, save } from "../lib/store";
 
 interface Rate { rate: number; date: string; }
 
-// Rates from Frankfurter (European Central Bank data, no API key), reused for the day.
+// Rates from Frankfurter (European Central Bank data, no API key). The ECB publishes once a
+// day around 16:00 CET, so a rate is reused for 3 hours, not a whole calendar day (a morning
+// fetch would otherwise stick until midnight). Old entries are pruned.
+const RATE_TTL_MS = 3 * 60 * 60 * 1000;
+interface CachedRate extends Rate { at: number; }
+
+function pruneRates(now: number) {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith("rate:")) continue;
+      const v = load<CachedRate | null>(k, null);
+      if (!v || typeof v.at !== "number" || now - v.at > RATE_TTL_MS) localStorage.removeItem(k);
+    }
+  } catch { /* storage unavailable */ }
+}
+
 async function fetchRate(from: string, to: string): Promise<Rate> {
-  const day = new Date().toISOString().slice(0, 10);
-  const key = `rate:${from}:${to}:${day}`;
-  const cached = load<Rate | null>(key, null);
-  if (cached) return cached;
+  const now = Date.now();
+  pruneRates(now);
+  const key = `rate:${from}:${to}`;
+  const cached = load<CachedRate | null>(key, null);
+  if (cached && now - cached.at <= RATE_TTL_MS) return cached;
   const res = await fetch(rateURL(from, to));
   if (!res.ok) throw new Error(String(res.status));
   const json = await res.json();
   const rate = json?.rates?.[to];
   if (typeof rate !== "number") throw new Error("sin tasa");
-  const r = { rate, date: String(json.date ?? day) };
+  const r: CachedRate = { rate, date: String(json.date ?? ""), at: now };
   save(key, r);
   return r;
 }
@@ -33,6 +50,7 @@ export function Currency() {
   const [tax, setTax] = useState("16");
   const [rate, setRate] = useState<Rate | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => { save("cur:amount", amount); save("cur:from", from); save("cur:to", to); }, [amount, from, to]);
 
@@ -40,13 +58,14 @@ export function Currency() {
     if (from === to) { setRate({ rate: 1, date: "" }); setError(null); return; }
     let alive = true;
     setRate(null);
+    setError(null);
     const id = window.setTimeout(() => {
       fetchRate(from, to)
         .then((r) => { if (alive) { setRate(r); setError(null); } })
         .catch(() => { if (alive) setError("No se pudo obtener la tasa. Revisa tu conexión."); });
     }, 250);
     return () => { alive = false; clearTimeout(id); };
-  }, [from, to]);
+  }, [from, to, retry]);
 
   const value = evaluateArithmetic(amount);
   const isExpression = value !== null && /[+\-*/×÷()]/.test(amount.trim().replace(/^-/, ""));
@@ -67,7 +86,7 @@ export function Currency() {
         <input type="checkbox" checked={taxOn} onChange={(e) => setTaxOn(e.target.checked)} /> Impuesto
         {taxOn && <><input className="tax-input" value={tax} onChange={(e) => setTax(e.target.value)} /> %</>}
       </label>
-      <div className="result">{error ? <span className="danger small">{error}</span> : total !== null ? fmt(total, to) : value === null && amount.trim() ? "—" : "…"}</div>
+      <div className="result">{error ? <span className="danger small">{error} <button className="small-btn" onClick={() => setRetry((n) => n + 1)}>Reintentar</button></span> : total !== null ? fmt(total, to) : value === null && amount.trim() ? "—" : "…"}</div>
       {rate && rate.date && <div className="muted small center">1 {from} = {rate.rate.toFixed(4)} {to} · {rate.date}</div>}
     </div>
   );
