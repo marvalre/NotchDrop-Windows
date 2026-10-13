@@ -69,6 +69,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .card { background: var(--card); border: 1px solid #2c2c2e; border-radius: 16px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .card h3 { margin: 0 0 2px; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.row-start { display: flex; align-items: center; gap: 8px; }
 .row-gap { display: flex; gap: 6px; flex: none; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }

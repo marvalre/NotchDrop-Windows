@@ -34,3 +34,10 @@ describe("parseTaxPercent", () => {
     for (const bad of ["", "-1", "101", "5*2", "1.2.3", "abc"]) expect(parseTaxPercent(bad)).toBeNull();
   });
 });
+
+import { rateURL } from "./calc";
+describe("rateURL", () => {
+  it("usa el dominio actual de Frankfurter (el .app responde 301 sin CORS y falla en la app)", () => {
+    expect(rateURL("USD", "MXN")).toBe("https://api.frankfurter.dev/v1/latest?from=USD&to=MXN");
+  });
+});

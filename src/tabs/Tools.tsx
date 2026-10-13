@@ -90,7 +90,7 @@ export function Tools(props: {
             <button key={m} onClick={() => add(Date.now() + m * 60_000, m)}>{m}m</button>
           ))}
         </div>
-        <div className="row">
+        <div className="row-start">
           <input className="time" type="time" value={time} onChange={(e) => setTime(e.target.value)} />
           <button
             className="small-btn"

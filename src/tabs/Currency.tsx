@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CURRENCY_CODES, evaluateArithmetic, parseTaxPercent } from "../lib/calc";
+import { CURRENCY_CODES, evaluateArithmetic, parseTaxPercent, rateURL } from "../lib/calc";
 import { load, save } from "../lib/store";
 
 interface Rate { rate: number; date: string; }
@@ -10,7 +10,7 @@ async function fetchRate(from: string, to: string): Promise<Rate> {
   const key = `rate:${from}:${to}:${day}`;
   const cached = load<Rate | null>(key, null);
   if (cached) return cached;
-  const res = await fetch(`https://api.frankfurter.app/latest?from=${from}&to=${to}`);
+  const res = await fetch(rateURL(from, to));
   if (!res.ok) throw new Error(String(res.status));
   const json = await res.json();
   const rate = json?.rates?.[to];

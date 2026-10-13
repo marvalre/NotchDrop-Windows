@@ -119,3 +119,9 @@ export const CURRENCY_CODES = [
   "INR", "KRW", "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "RON", "TRY",
   "ZAR", "SGD", "HKD", "NZD", "ILS", "PHP", "THB", "IDR", "MYR", "ISK",
 ];
+
+/** Frankfurter moved from api.frankfurter.app to api.frankfurter.dev/v1; the old host now
+ * answers 301 without CORS headers, which a webview treats as a failed request. */
+export function rateURL(from: string, to: string): string {
+  return `https://api.frankfurter.dev/v1/latest?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+}
