@@ -1,0 +1,60 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install
+        run: npm ci
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Rust tests (real Windows, SMTC/clipboard code included)
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Build installers
+        run: npx tauri build
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: NotchDrop-Windows
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            src-tauri/target/release/bundle/nsis/*.exe \
+            src-tauri/target/release/bundle/msi/*.msi \
+            --title "NotchDrop para Windows ${GITHUB_REF_NAME}" \
+            --notes "Instalador para Windows 10/11. Descarga el .exe y ábrelo."
