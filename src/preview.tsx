@@ -21,5 +21,5 @@ localStorage.setItem("clipboard", JSON.stringify(["Quiero que continúes\nun pro
 localStorage.setItem("shelf", JSON.stringify(["C:\\Users\\Marcelo\\Downloads\\video-viral.mp4", "C:\\Users\\Marcelo\\Downloads\\cancion.mp3", "C:\\Users\\Marcelo\\Downloads\\portada.png"]));
 localStorage.setItem("prefs", JSON.stringify({ hoverOpen: true, persistClipboard: true }));
 const now = Date.now();
-localStorage.setItem("alarms", JSON.stringify(JSON.stringify([{ id: "a", end: now + 8.5 * 60_000, minutes: 10 }, { id: "b", end: now + 44 * 60_000, minutes: 45 }])));
+localStorage.setItem("alarms", JSON.stringify(JSON.stringify([{ id: "a", end: now + 8 * 3600_000, minutes: 480 }, { id: "b", end: now + 10 * 3600_000, minutes: 600 }])));
 await import("./main");
