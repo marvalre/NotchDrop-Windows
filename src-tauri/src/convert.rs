@@ -52,7 +52,8 @@ pub fn convert_args(kind: Kind, target: &str) -> Result<Vec<String>, String> {
         (Kind::Video | Kind::Audio, "wav") => s(&["-vn", "-c:a", "pcm_s16le"]),
         (Kind::Audio, "flac") => s(&["-vn", "-c:a", "flac"]),
         (Kind::Video, "mp4" | "mov") => s(&["-c:v", "libx264", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k"]),
-        (Kind::Video, "webm") => s(&["-c:v", "libvpx-vp9", "-crf", "33", "-b:v", "0", "-c:a", "libopus"]),
+        // VP9 defaults are extremely slow; these keep a 1080p clip in minutes, not tens of minutes.
+        (Kind::Video, "webm") => s(&["-c:v", "libvpx-vp9", "-crf", "33", "-b:v", "0", "-deadline", "good", "-cpu-used", "4", "-row-mt", "1", "-c:a", "libopus"]),
         // Short, small GIF: 12 fps, 480 px wide, so a long clip can't explode.
         (Kind::Video, "gif") => s(&["-vf", "fps=12,scale=480:-1:flags=lanczos", "-loop", "0"]),
         (Kind::Image, "png") => s(&["-frames:v", "1"]),

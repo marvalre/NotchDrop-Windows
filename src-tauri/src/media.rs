@@ -88,6 +88,13 @@ mod imp {
         Some(MediaInfo { title, artist, album, app, playing, position, duration, artwork: art, artwork_key: key })
     }
 
+    pub fn seek(seconds: f64) -> bool {
+        let Ok(s) = session() else { return false };
+        let start = s.GetTimelineProperties().and_then(|t| t.StartTime()).map(|t| t.Duration).unwrap_or(0);
+        let ticks = start + (seconds.max(0.0) * 1e7) as i64;
+        s.TryChangePlaybackPositionAsync(ticks).and_then(|o| o.get()).unwrap_or(false)
+    }
+
     pub fn command(action: &str) -> bool {
         let Ok(s) = session() else { return false };
         let op = match action {
@@ -105,9 +112,10 @@ mod imp {
     use super::*;
     pub fn current(_known_key: &str) -> Option<MediaInfo> { None }
     pub fn command(_action: &str) -> bool { false }
+    pub fn seek(_seconds: f64) -> bool { false }
 }
 
-pub use imp::{command, current};
+pub use imp::{command, current, seek};
 
 #[cfg(test)]
 mod tests {

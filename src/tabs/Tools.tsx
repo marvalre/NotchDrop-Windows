@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Stopwatch, elapsed, pause, start } from "../lib/stopwatch";
-import { copyText } from "../lib/api";
+import { AlarmClock, Clipboard, ExternalLink, Timer, X } from "lucide-react";
+import { copyImage, copyText, formatBytes, openSpecial } from "../lib/api";
+import type { ClipItem } from "../lib/clipboard";
 import { AlarmStore, MAX_ALARMS } from "../lib/alarms";
 import { primeAudio } from "../lib/alarmTone";
 import { preview } from "../lib/clipboard";
@@ -23,7 +25,7 @@ function nextAt(hhmm: string, from = new Date()): number | null {
 }
 
 export function Tools(props: {
-  clips: string[];
+  clips: ClipItem[];
   alarms: AlarmStore;
   setAlarms: (s: AlarmStore) => void;
   now: number;
@@ -72,14 +74,20 @@ export function Tools(props: {
   return (
     <div className="scroll">
       <section className="card">
-        <h3 className="violet">📋 Portapapeles</h3>
-        {clips.length === 0 && <div className="muted small">Copia texto para verlo aquí.</div>}
+        <h3 className="violet"><Clipboard size={14} strokeWidth={2.4} /> Portapapeles</h3>
+        {clips.length === 0 && <div className="muted small">Copia texto o una imagen para verlos aquí.</div>}
         {clips.slice(0, 6).map((c, i) => (
-          <div className="row" key={c + i}>
-            <span className="clip" title={preview(c)}>{preview(c)}</span>
+          <div className="row" key={(c.kind === "text" ? c.text : c.url).slice(0, 200) + i}>
+            {c.kind === "text" ? (
+              <span className="clip" title={preview(c.text)}>{preview(c.text)}</span>
+            ) : (
+              <span className="clip clip-image"><img src={c.url} alt="" /> Imagen · {formatBytes(c.bytes)}</span>
+            )}
             <button
               className="small-btn"
-              onClick={async () => { await copyText(c); setCopied(i); setTimeout(() => setCopied(null), 1000); }}
+              onClick={async () => {
+                try { if (c.kind === "text") await copyText(c.text); else await copyImage(c.url); setCopied(i); setTimeout(() => setCopied(null), 1000); } catch { /* clipboard busy */ }
+              }}
             >
               {copied === i ? "¡Copiado!" : "Copiar"}
             </button>
@@ -88,7 +96,10 @@ export function Tools(props: {
       </section>
 
       <section className="card">
-        <h3 className="green">⏰ Alarmas</h3>
+        <div className="row">
+          <h3 className="green"><AlarmClock size={14} strokeWidth={2.4} /> Alarmas</h3>
+          <button className="small-btn icon-text" onClick={() => void openSpecial("clock")}><ExternalLink size={12} />Abrir Reloj</button>
+        </div>
         <div className="presets">
           {PRESETS.map((m) => (
             <button key={m} onClick={() => add(Date.now() + m * 60_000, m)}>{m}m</button>
@@ -114,15 +125,15 @@ export function Tools(props: {
           const r = Math.max(0, Math.floor((a.end - now) / 1000));
           return (
             <div className="row" key={a.id}>
-              <span className="mono">⏰ {String(Math.floor(r / 60)).padStart(2, "0")}:{String(r % 60).padStart(2, "0")} restantes — suena a las {timeOf(a.end)}</span>
-              <button className="small-btn" aria-label="Cancelar esta alarma" title="Cancelar esta alarma" onClick={() => cancel(a.id)}>✕</button>
+              <span className="mono row-start"><AlarmClock size={14} /> {String(Math.floor(r / 60)).padStart(2, "0")}:{String(r % 60).padStart(2, "0")} restantes — suena a las {timeOf(a.end)}</span>
+              <button className="small-btn" aria-label="Cancelar esta alarma" title="Cancelar esta alarma" onClick={() => cancel(a.id)}><X size={13} /></button>
             </div>
           );
         })}
       </section>
 
       <section className="card">
-        <h3 className="orange">⏱ Cronómetro</h3>
+        <h3 className="orange"><Timer size={14} strokeWidth={2.4} /> Cronómetro</h3>
         <div className="row">
           <span className="stopwatch mono">{stopwatchText(swElapsed)}</span>
           <div className="row-gap">

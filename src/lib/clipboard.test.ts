@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ClipboardHistory, MAX_CAPTURED_BYTES, MAX_ITEMS, preview, shouldCapture } from "./clipboard";
+import { ClipboardHistory, MAX_CAPTURED_BYTES, MAX_IMAGE_TOTAL, MAX_ITEMS, preview, shouldCapture } from "./clipboard";
 
 describe("preview", () => {
   it("siempre una línea (el bug de la versión Mac 3.14.1)", () => {
@@ -19,21 +19,42 @@ describe("shouldCapture", () => {
   });
 });
 
+const img = (n: number, bytes = 1000) => ({ kind: "image" as const, url: `data:image/png;base64,${n}`, bytes });
+
 describe("ClipboardHistory", () => {
   it("lo más reciente arriba, sin duplicados", () => {
     const h = new ClipboardHistory();
-    h.push("a"); h.push("b"); h.push("a");
-    expect(h.items).toEqual(["a", "b"]);
+    h.pushText("a"); h.pushText("b"); h.pushText("a");
+    expect(h.texts()).toEqual(["a", "b"]);
   });
   it(`guarda como máximo ${MAX_ITEMS}`, () => {
     const h = new ClipboardHistory();
-    for (let i = 0; i < MAX_ITEMS + 5; i++) h.push(`t${i}`);
+    for (let i = 0; i < MAX_ITEMS + 5; i++) h.pushText(`t${i}`);
     expect(h.items.length).toBe(MAX_ITEMS);
-    expect(h.items[0]).toBe(`t${MAX_ITEMS + 4}`);
+    expect(h.texts()[0]).toBe(`t${MAX_ITEMS + 4}`);
   });
   it("ignora lo que no se debe capturar", () => {
     const h = new ClipboardHistory();
-    h.push("");
+    h.pushText("");
     expect(h.items).toEqual([]);
+  });
+  it("texto e imágenes conviven; la misma imagen no se repite", () => {
+    const h = new ClipboardHistory();
+    h.pushText("hola"); h.push(img(1)); h.push(img(1));
+    expect(h.items.map((i) => i.kind)).toEqual(["image", "text"]);
+  });
+  it("las imágenes no pasan del tope total: se van las más viejas", () => {
+    const h = new ClipboardHistory();
+    const big = Math.floor(MAX_IMAGE_TOTAL / 2.5);
+    h.push(img(1, big)); h.pushText("t"); h.push(img(2, big)); h.push(img(3, big));
+    const urls = h.items.filter((i) => i.kind === "image").map((i) => (i as { url: string }).url);
+    expect(urls).toEqual([img(3).url, img(2).url]);
+    expect(h.texts()).toEqual(["t"]);
+  });
+  it("solo el texto se guarda en disco", () => {
+    const h = new ClipboardHistory();
+    h.pushText("a"); h.push(img(1));
+    expect(h.persistable()).toEqual(["a"]);
+    expect(ClipboardHistory.restore(["x", 5 as unknown as string]).texts()).toEqual(["x"]);
   });
 });

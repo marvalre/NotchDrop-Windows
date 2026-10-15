@@ -11,8 +11,10 @@ mockIPC((cmd, args) => {
   if (cmd === "plugin:autostart|is_enabled") return false;
   if (cmd === "plugin:app|version") return "0.1.0";
   if (cmd === "plugin:event|listen") return 1;
+  if (cmd === "volume_get" || cmd === "volume_set" || cmd === "volume_mute") return { level: 0.55, muted: false };
+  if (cmd === "media_seek") return true;
   if (cmd === "tools_status") return { missing: ["yt-dlp", "ffmpeg", "ffprobe"] };
-  if (cmd === "files_info") return (args as { paths: string[] }).paths.map((p, i) => ({ path: p, name: p.split("\\").pop(), bytes: [48_200_000, 3_400_000, 820_000][i % 3], exists: true, kind: ["video", "audio", "image"][i % 3], targets: [["mov", "webm", "gif", "mp3", "m4a", "wav"], ["m4a", "wav", "flac"], ["jpg", "webp", "bmp", "tiff", "gif"]][i % 3] }));
+  if (cmd === "files_info") return (args as { paths: string[] }).paths.map((p, i) => ({ path: p, name: p.split("\\").pop(), bytes: [48_200_000, 3_400_000, 820_000][i % 3], exists: true, isDir: false, kind: ["video", "audio", "image"][i % 3], targets: [["mov", "webm", "gif", "mp3", "m4a", "wav"], ["m4a", "wav", "flac"], ["jpg", "webp", "bmp", "tiff", "gif"]][i % 3] }));
   return null;
 });
 localStorage.setItem("clipboard", JSON.stringify(["Quiero que continúes\nun proyecto que empecé con Codex: crear y vender páginas web", "https://youtu.be/dQw4w9WgXcQ"]));

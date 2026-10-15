@@ -1,10 +1,15 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Done, FileInfo, baseName, compressFile, convertFile, errorText, filesInfo, formatBytes, installTools, openFile, revealFile, toolsStatus } from "../lib/api";
+import { FileUp, FolderOpen, ExternalLink } from "lucide-react";
+import type { Jobs, WithModal } from "../App";
+import { Done, FileInfo, baseName, compressFile, convertFile, errorText, filesInfo, formatBytes, openFile, revealFile } from "../lib/api";
+import { FileIcon } from "../components/FileIcon";
 
 const PERCENTS = [90, 75, 50, 30];
 
-export function Convert({ path, setPath, addToShelf }: { path: string | null; setPath: (p: string | null) => void; addToShelf: (p: string) => void }) {
+export function Convert({ path, setPath, addToShelf, jobs, withModal }: {
+  path: string | null; setPath: (p: string | null) => void; addToShelf: (p: string) => void; jobs: Jobs; withModal: WithModal;
+}) {
   const [info, setInfo] = useState<FileInfo | null>(null);
   const [mode, setMode] = useState<"format" | "compress">("format");
   const [target, setTarget] = useState("");
@@ -12,19 +17,21 @@ export function Convert({ path, setPath, addToShelf }: { path: string | null; se
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Done | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [missing, setMissing] = useState<string[]>([]);
 
-  useEffect(() => { void toolsStatus().then((s) => setMissing(s.missing.filter((m) => m !== "yt-dlp"))).catch(() => {}); }, []);
   useEffect(() => {
     setResult(null); setError(null);
     if (!path) { setInfo(null); return; }
-    void filesInfo([path]).then(([i]) => { setInfo(i ?? null); setTarget(i?.targets[0] ?? ""); });
+    let current = true; // a slow answer for an older file must not overwrite the new one
+    void filesInfo([path])
+      .then(([i]) => { if (current) { setInfo(i ?? null); setTarget(i?.targets[0] ?? ""); } })
+      .catch((e) => { if (current) { setInfo(null); setError(errorText(e)); } });
+    return () => { current = false; };
   }, [path]);
 
-  const pick = async () => {
+  const pick = () => void withModal(async () => {
     const p = await open({ multiple: false, directory: false });
     if (typeof p === "string") setPath(p);
-  };
+  });
 
   const run = async () => {
     if (!info) return;
@@ -35,18 +42,19 @@ export function Convert({ path, setPath, addToShelf }: { path: string | null; se
       addToShelf(r.path);
     } catch (e) {
       setError(errorText(e));
-      if (String(e) === "MISSING_TOOLS") void toolsStatus().then((s) => setMissing(s.missing.filter((m) => m !== "yt-dlp")));
+      if (String(e) === "MISSING_TOOLS") jobs.refreshTools();
     } finally { setBusy(false); }
   };
 
+  const ffMissing = jobs.missing.filter((m) => m !== "yt-dlp");
   const canCompress = info !== null && info.kind !== "unsupported";
   return (
     <div className="convert">
       <div className="convert-file">
-        <div className="tile-icon big">{info ? ({ video: "🎬", audio: "🎵", image: "🖼", unsupported: "📄" } as Record<string, string>)[info.kind] : "📥"}</div>
+        <div className="tile-icon big">{info ? <FileIcon kind={info.kind} isDir={info.isDir} size={40} /> : <FileUp size={40} strokeWidth={1.6} />}</div>
         <div className="convert-name">{info ? info.name : "Ningún archivo seleccionado"}</div>
         {info && <div className="muted small">{formatBytes(info.bytes)}</div>}
-        <button className="small-btn" onClick={() => void pick()}>Elegir archivo</button>
+        <button className="small-btn" onClick={pick}>Subir archivo</button>
       </div>
       <div className="convert-opts">
         <div className="seg wide">
@@ -70,16 +78,16 @@ export function Convert({ path, setPath, addToShelf }: { path: string | null; se
         )}
         <button
           className="small-btn primary big"
-          disabled={busy || !info || !info.exists || (mode === "format" ? !target : !canCompress)}
+          disabled={busy || !info || !info.exists || info.isDir || (mode === "format" ? !target : !canCompress)}
           onClick={() => void run()}
         >
           {busy ? "Trabajando…" : mode === "format" ? "Convertir" : "Comprimir"}
         </button>
-        {info && info.kind === "unsupported" && <div className="muted small">Ese tipo de archivo no se puede convertir.</div>}
-        {missing.length > 0 && (
+        {info && (info.kind === "unsupported" || info.isDir) && <div className="muted small">Ese tipo de archivo no se puede convertir.</div>}
+        {ffMissing.length > 0 && (
           <div className="row">
-            <span className="muted small">Video y audio necesitan ffmpeg (gratis).</span>
-            <button className="small-btn" onClick={() => void installTools().then(() => toolsStatus()).then((s) => setMissing(s.missing.filter((m) => m !== "yt-dlp"))).catch((e) => setError(errorText(e)))}>Instalar</button>
+            <span className="muted small">{jobs.installing ? jobs.status?.text : "Video y audio necesitan ffmpeg (gratis)."}</span>
+            <button className="small-btn" disabled={jobs.installing} onClick={jobs.install}>{jobs.installing ? "Instalando…" : "Instalar"}</button>
           </div>
         )}
         {error && <div className="danger small">{error}</div>}
@@ -87,8 +95,8 @@ export function Convert({ path, setPath, addToShelf }: { path: string | null; se
           <div className="result-row">
             <span className="green small">✓ {baseName(result.path)} · {formatBytes(result.originalBytes)} → {formatBytes(result.bytes)}</span>
             <div className="row-gap">
-              <button className="small-btn" onClick={() => void openFile(result.path)}>Abrir</button>
-              <button className="small-btn" onClick={() => void revealFile(result.path)}>Carpeta</button>
+              <button className="small-btn icon-text" onClick={() => void openFile(result.path)}><ExternalLink size={13} />Abrir</button>
+              <button className="small-btn icon-text" onClick={() => void revealFile(result.path)}><FolderOpen size={13} />Mostrar</button>
             </div>
           </div>
         )}

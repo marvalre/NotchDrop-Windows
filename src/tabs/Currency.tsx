@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ArrowLeftRight } from "lucide-react";
 import { CURRENCY_CODES, evaluateArithmetic, parseTaxPercent, rateURL } from "../lib/calc";
 import { load, save } from "../lib/store";
 
@@ -79,7 +80,7 @@ export function Currency() {
       {isExpression && value !== null && <div className="muted small center">= {value.toLocaleString()}</div>}
       <div className="pair">
         <select value={from} onChange={(e) => setFrom(e.target.value)}>{CURRENCY_CODES.map((c) => <option key={c}>{c}</option>)}</select>
-        <button className="swap" aria-label="Invertir" onClick={() => { setFrom(to); setTo(from); }}>⇄</button>
+        <button className="swap" aria-label="Invertir" onClick={() => { setFrom(to); setTo(from); }}><ArrowLeftRight size={17} /></button>
         <select value={to} onChange={(e) => setTo(e.target.value)}>{CURRENCY_CODES.map((c) => <option key={c}>{c}</option>)}</select>
       </div>
       <label className="tax">

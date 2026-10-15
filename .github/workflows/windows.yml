@@ -40,6 +40,9 @@ jobs:
             curl -sSL -o "$RUNNER_TEMP/ff/$t.gz" "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/$t-win32-x64.gz"
             gunzip -c "$RUNNER_TEMP/ff/$t.gz" > "$RUNNER_TEMP/ff/$t.exe"
           done
+          # Same pinned digests as src-tauri/src/tools.rs.
+          echo "8883a3dffbd0a16cf4ef95206ea05283f78908dbfb118f73c83f4951dcc06d77  $RUNNER_TEMP/ff/ffmpeg.gz" | sha256sum -c -
+          echo "f309e6223ad89d2fe54bccd420a7709b66fd27540674e92309578ed491a43c8d  $RUNNER_TEMP/ff/ffprobe.gz" | sha256sum -c -
           echo "NOTCHDROP_FFMPEG=$RUNNER_TEMP/ff/ffmpeg.exe" >> "$GITHUB_ENV"
           echo "NOTCHDROP_FFPROBE=$RUNNER_TEMP/ff/ffprobe.exe" >> "$GITHUB_ENV"
 

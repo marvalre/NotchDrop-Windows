@@ -6,19 +6,26 @@ export interface MediaInfo {
   artwork: string | null; artworkKey: string;
 }
 
-export const setExpanded = (expanded: boolean, focus = false) => invoke<void>("set_expanded", { expanded, focus });
+export const setExpanded = (expanded: boolean, focus = false, panel?: number) => invoke<void>("set_expanded", { expanded, focus, panel: panel ?? null });
 export const mediaState = (knownKey: string) => invoke<MediaInfo | null>("media_state", { knownKey });
 export const mediaCommand = (action: "toggle" | "next" | "previous") => invoke<boolean>("media_command", { action });
 export const copyText = (text: string) => invoke<void>("copy_text", { text });
+export const copyImage = (dataUrl: string) => invoke<void>("copy_image", { dataUrl });
+export const mediaSeek = (seconds: number) => invoke<boolean>("media_seek", { seconds });
+export interface Volume { level: number; muted: boolean; }
+export const volumeGet = () => invoke<Volume | null>("volume_get");
+export const volumeSet = (level: number) => invoke<Volume | null>("volume_set", { level });
+export const volumeMute = (muted: boolean) => invoke<Volume | null>("volume_mute", { muted });
+export const openSpecial = (target: "sound" | "clock" | "downloads") => invoke<void>("open_special", { target });
 export const quitApp = () => invoke<void>("quit_app");
 
 export type FileKind = "video" | "audio" | "image" | "unsupported";
-export interface FileInfo { path: string; name: string; bytes: number; exists: boolean; kind: FileKind; targets: string[]; }
+export interface FileInfo { path: string; name: string; bytes: number; exists: boolean; isDir: boolean; kind: FileKind; targets: string[]; }
 export interface Done { path: string; bytes: number; originalBytes: number; }
 
 export const toolsStatus = () => invoke<{ missing: string[] }>("tools_status");
 export const installTools = () => invoke<void>("install_tools");
-export const downloadMedia = (url: string, format: "mp4" | "mp3") => invoke<string>("download_media", { url, format });
+export const downloadMedia = (url: string, format: "mp4" | "mp3", cookies: string | null) => invoke<string>("download_media", { url, format, cookies });
 export const filesInfo = (paths: string[]) => invoke<FileInfo[]>("files_info", { paths });
 export const convertFile = (path: string, target: string) => invoke<Done>("convert_file", { path, target });
 export const compressFile = (path: string, percent: number) => invoke<Done>("compress_file", { path, percent });

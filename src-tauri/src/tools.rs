@@ -84,7 +84,11 @@ fn fetch(c: &reqwest::blocking::Client, url: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Installs whatever is missing. `progress` gets human-readable steps.
+static INSTALLING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// One install at a time: a second one would delete the first one's .partial files.
 pub fn install_missing(app_bin: &Path, progress: impl Fn(String)) -> Result<(), String> {
+    let Ok(_guard) = INSTALLING.try_lock() else { return Err("Ya se están instalando las herramientas.".into()) };
     std::fs::create_dir_all(app_bin).map_err(|e| e.to_string())?;
     remove_leftovers(app_bin);
     let c = client()?;

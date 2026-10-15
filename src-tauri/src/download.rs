@@ -76,8 +76,15 @@ pub fn extractor_args(url: &str) -> Vec<String> {
     } else { vec![] }
 }
 
-pub fn build_args(url: &str, format: Format, ffmpeg_dir: Option<&Path>, out_dir: &Path) -> Vec<String> {
-    let mut a = extractor_args(url);
+/// Browsers yt-dlp can read cookies from (for content that needs a signed-in session).
+pub fn cookie_browser(s: &str) -> Option<&'static str> {
+    match s.to_ascii_lowercase().as_str() { "firefox" => Some("firefox"), "edge" => Some("edge"), "chrome" => Some("chrome"), "brave" => Some("brave"), _ => None }
+}
+
+pub fn build_args(url: &str, format: Format, ffmpeg_dir: Option<&Path>, out_dir: &Path, cookies: Option<&str>) -> Vec<String> {
+    let mut a = vec!["--encoding".to_string(), "utf-8".to_string()];
+    if let Some(b) = cookies.and_then(cookie_browser) { a.push("--cookies-from-browser".into()); a.push(b.into()); }
+    a.extend(extractor_args(url));
     if let Some(d) = ffmpeg_dir { a.push("--ffmpeg-location".into()); a.push(d.to_string_lossy().into()); }
     for s in ["--no-playlist", "--no-warnings", "--restrict-filenames", "--no-simulate", "--print", "after_move:filepath", "--windows-filenames", "-o"] {
         a.push(s.into());
@@ -90,11 +97,12 @@ pub fn build_args(url: &str, format: Format, ffmpeg_dir: Option<&Path>, out_dir:
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Failure { MissingConversionTools, TikTokBlocked, LoginRequired, Unsupported, Unavailable, Other }
+pub enum Failure { MissingConversionTools, CookiesUnreadable, TikTokBlocked, LoginRequired, Unsupported, Unavailable, Other }
 
 pub fn classify(stderr: &str) -> Failure {
     let l = stderr.to_lowercase();
-    if l.contains("ffmpeg") && (l.contains("not found") || l.contains("ffprobe")) { return Failure::MissingConversionTools; }
+    if l.contains("ffmpeg") && (l.contains("not found") || l.contains("not installed") || l.contains("ffprobe")) { return Failure::MissingConversionTools; }
+    if (l.contains("could not copy") && l.contains("cookie")) || l.contains("failed to decrypt") { return Failure::CookiesUnreadable; }
     if l.contains("universal data for rehydration") || l.contains("captcha") { return Failure::TikTokBlocked; }
     if l.contains("private") || l.contains("login") || l.contains("sign in") || l.contains("cookies") { return Failure::LoginRequired; }
     if l.contains("unsupported url") { return Failure::Unsupported; }
@@ -105,8 +113,9 @@ pub fn classify(stderr: &str) -> Failure {
 pub fn friendly_error(stderr: &str) -> String {
     match classify(stderr) {
         Failure::MissingConversionTools => "Faltan las herramientas de conversión (ffmpeg). Pulsa «Instalar herramientas».".into(),
+        Failure::CookiesUnreadable => "No se pudieron leer las cookies de ese navegador (ciérralo e inténtalo de nuevo, o elige Firefox en Ajustes).".into(),
         Failure::TikTokBlocked => "TikTok bloqueó la petición. Espera un momento y vuelve a intentar.".into(),
-        Failure::LoginRequired => "Contenido privado o que requiere iniciar sesión.".into(),
+        Failure::LoginRequired => "Contenido privado o que requiere iniciar sesión — prueba las cookies del navegador en Ajustes.".into(),
         Failure::Unsupported => "Ese sitio no está soportado.".into(),
         Failure::Unavailable => "El contenido ya no está disponible.".into(),
         Failure::Other => {
@@ -138,8 +147,12 @@ pub fn download_direct(url: &str, out_dir: &Path) -> Result<PathBuf, String> {
     let final_url = r.url().to_string();
     let mime = r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
     let name = direct_verdict(&final_url, r.status().as_u16(), &mime)?;
-    let bytes = r.bytes().map_err(|e| e.to_string())?;
-    if bytes.len() > 100 * 1024 * 1024 { return Err("La imagen es demasiado grande.".into()); }
+    const MAX: u64 = 100 * 1024 * 1024;
+    if r.content_length().map(|n| n > MAX).unwrap_or(false) { return Err("La imagen es demasiado grande.".into()); }
+    let mut bytes = Vec::new();
+    use std::io::Read;
+    r.take(MAX + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX { return Err("La imagen es demasiado grande.".into()); }
     let target = unique_path(out_dir, &name);
     std::fs::write(&target, &bytes).map_err(|e| e.to_string())?;
     Ok(target)
@@ -148,8 +161,8 @@ pub fn download_direct(url: &str, out_dir: &Path) -> Result<PathBuf, String> {
 pub const RETRY_LIMIT: u32 = 6;
 
 /// Runs yt-dlp, retrying only errors that look transient (TikTok's anti-bot check).
-pub fn download_with_tool(ytdlp: &Path, ffmpeg_dir: Option<&Path>, url: &str, format: Format, out_dir: &Path, on_retry: impl Fn(u32)) -> Result<PathBuf, String> {
-    let args = build_args(url, format, ffmpeg_dir, out_dir);
+pub fn download_with_tool(ytdlp: &Path, ffmpeg_dir: Option<&Path>, url: &str, format: Format, out_dir: &Path, cookies: Option<&str>, on_retry: impl Fn(u32)) -> Result<PathBuf, String> {
+    let args = build_args(url, format, ffmpeg_dir, out_dir, cookies);
     let mut last = "Falló la descarga.".to_string();
     for attempt in 1..=RETRY_LIMIT {
         let o = crate::proc::run(ytdlp, &args, Duration::from_secs(600));
@@ -193,12 +206,16 @@ mod tests {
     #[test]
     fn args_put_url_after_double_dash() {
         // A "link" starting with "-" must never be read by yt-dlp as an option.
-        let a = build_args("https://x.com/v", Format::Mp4, Some(Path::new("C:\\bin")), Path::new("C:\\Users\\u\\Downloads"));
+        let a = build_args("https://x.com/v", Format::Mp4, Some(Path::new("C:\\bin")), Path::new("C:\\Users\\u\\Downloads"), Some("firefox"));
         let n = a.len();
         assert_eq!(a[n - 2], "--");
         assert_eq!(a[n - 1], "https://x.com/v");
         assert!(a.windows(2).any(|w| w[0] == "--ffmpeg-location" && w[1] == "C:\\bin"));
         assert!(a.contains(&"--no-playlist".to_string()));
+        assert!(a.windows(2).any(|w| w[0] == "--encoding" && w[1] == "utf-8"), "UTF-8 output for non-ASCII user folders");
+        assert!(a.windows(2).any(|w| w[0] == "--cookies-from-browser" && w[1] == "firefox"));
+        let none = build_args("https://x.com/v", Format::Mp4, None, Path::new("C:\\d"), Some("$(evil)"));
+        assert!(!none.contains(&"--cookies-from-browser".to_string()), "only known browsers");
     }
 
     #[test]
@@ -210,6 +227,8 @@ mod tests {
     #[test]
     fn classify_real_errors() {
         assert_eq!(classify("ERROR: Postprocessing: ffprobe and ffmpeg not found. Please install"), Failure::MissingConversionTools);
+        assert_eq!(classify("ERROR: You have requested merging of multiple formats but ffmpeg is not installed. Aborting due to --abort-on-error"), Failure::MissingConversionTools);
+        assert_eq!(classify("ERROR: Could not copy Chrome cookie database. See  https://github.com/yt-dlp/yt-dlp/issues/7271"), Failure::CookiesUnreadable);
         assert_eq!(classify("ERROR: [youtube] x: Sign in to confirm you're not a bot."), Failure::LoginRequired);
         assert_eq!(classify("ERROR: Unable to extract universal data for rehydration"), Failure::TikTokBlocked);
         assert_eq!(classify("ERROR: Unsupported URL: https://x.com"), Failure::Unsupported);
