@@ -10,7 +10,7 @@ import { startAlarmTone, stopAlarmTone } from "./lib/alarmTone";
 import { ClipItem, ClipboardHistory } from "./lib/clipboard";
 import { load, remove, save } from "./lib/store";
 import { STOPPED, Stopwatch } from "./lib/stopwatch";
-import { CollapseState, INITIAL as COLLAPSE_INITIAL, leaveCollapses, onEnter as enteredState, onListClosed, onListMouseDown } from "./lib/collapse";
+import { CollapseState, INITIAL as COLLAPSE_INITIAL, leaveCollapses, onEnter as enteredState } from "./lib/collapse";
 import { Player } from "./tabs/Player";
 import { Shelf } from "./tabs/Shelf";
 import { Tools } from "./tabs/Tools";
@@ -54,6 +54,9 @@ export interface Jobs {
 /** The Convert tab's job, kept here so collapsing mid-conversion neither loses the result
  * nor lets a second ffmpeg start on the same file. */
 export interface ConvertJob {
+  /** The file the busy/result/error belong to; another file selected shows none of them. */
+  source: string | null;
+  mode: "format" | "compress";
   busy: boolean;
   result: Done | null;
   error: string | null;
@@ -143,6 +146,8 @@ export default function App() {
     }).catch(() => {});
   }, []);
   const [convertPath, setConvertPath] = useState<string | null>(null);
+  // The copied link the Shelf already offered/downloaded: never auto-filled again.
+  const consumedClip = useRef<string | null>(null);
   const [dragging, setDragging] = useState(false);
 
   // ── alarms / stopwatch ──
@@ -180,11 +185,21 @@ export default function App() {
     leaveTimer.current = window.setTimeout(() => void collapse(), 350);
   }, [collapse]);
 
-  const expand = useCallback(async (focus: boolean, toTab?: Tab) => {
+  const tourPending = useRef(!load<boolean>("tourSeen", false));
+  const [tourStep, setTourStep] = useState<number | null>(null);
+  const expand = useCallback(async (focus: boolean, toTab?: Tab, fromDrop = false) => {
     cancelLeave();
     if (toTab) setTab(toTab);
     setExp(true);
     await setExpanded(true, focus, prefsRef.current.panelSize);
+    // First-run tour: only once the panel has actually opened, and never on a file drop (as on
+    // the Mac). Marked seen the first time it shows.
+    if (tourPending.current && !fromDrop) {
+      tourPending.current = false;
+      save("tourSeen", true);
+      setTab("player");
+      setTourStep(0);
+    }
     // The pointer may have crossed the 40px pill and left while the window was still
     // resizing; no new mouseleave fires then, so check here or it stays open.
     if (!focus && !hovering.current && !cs.current.sticky) scheduleLeave();
@@ -205,26 +220,14 @@ export default function App() {
       if (expandedRef.current) void collapse();
       else { cs.current = { ...COLLAPSE_INITIAL, sticky: true }; void expand(true); }
     });
-    const onBlur = () => { if (expandedRef.current && !hovering.current && modalOpen.current === 0 && !cs.current.listOpen) void collapse(); };
-    const onKey = (e: KeyboardEvent) => {
-      // Escape inside an open list only closes the list.
-      if (e.key === "Escape" && expandedRef.current && (e.target as HTMLElement)?.tagName !== "SELECT") void collapse();
-    };
-    const isSelect = (e: Event) => (e.target as HTMLElement | null)?.tagName === "SELECT";
-    const listOpened = (e: Event) => { if (isSelect(e)) { cs.current = onListMouseDown(cs.current); cancelLeave(); } };
-    const listClosed = (e: Event) => { if (isSelect(e)) cs.current = onListClosed(cs.current); };
+    const onBlur = () => { if (expandedRef.current && !hovering.current && modalOpen.current === 0) void collapse(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && expandedRef.current) void collapse(); };
     window.addEventListener("blur", onBlur);
     window.addEventListener("keydown", onKey);
-    document.addEventListener("mousedown", listOpened, true);
-    document.addEventListener("change", listClosed, true);
-    document.addEventListener("focusout", listClosed, true);
     return () => {
       void un.then((f) => f());
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("keydown", onKey);
-      document.removeEventListener("mousedown", listOpened, true);
-      document.removeEventListener("change", listClosed, true);
-      document.removeEventListener("focusout", listClosed, true);
     };
   }, [expand, collapse]);
 
@@ -240,7 +243,7 @@ export default function App() {
     if (!expandedRef.current || !leaveCollapses({ ...cs.current, modal: modalOpen.current > 0 })) return;
     // Don't snatch the panel away mid-typing; clicking outside (blur) still closes it.
     const a = document.activeElement;
-    if (document.hasFocus() && a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT")) return;
+    if (document.hasFocus() && a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")) return;
     scheduleLeave();
   };
 
@@ -251,7 +254,7 @@ export default function App() {
       if (p.type === "enter" || p.type === "over") {
         setDragging(true);
         hovering.current = true;
-        if (!expandedRef.current) void expand(false, "shelf"); else setTab("shelf");
+        if (!expandedRef.current) void expand(false, "shelf", true); else setTab("shelf");
       } else if (p.type === "drop") {
         setDragging(false);
         addToShelf(p.paths);
@@ -279,14 +282,16 @@ export default function App() {
     return () => { void a.then((f) => f()); void b.then((f) => f()); };
   }, [refreshTools]);
   const [converting, setConverting] = useState(false);
+  const [convSource, setConvSource] = useState<string | null>(null);
+  const [convMode, setConvMode] = useState<"format" | "compress">("format");
   const [convResult, setConvResult] = useState<Done | null>(null);
   const [convError, setConvError] = useState<string | null>(null);
   const convert: ConvertJob = {
-    busy: converting, result: convResult, error: convError,
-    clear: () => { setConvResult(null); setConvError(null); },
+    source: convSource, mode: convMode, busy: converting, result: convResult, error: convError,
+    clear: () => { if (!converting) { setConvResult(null); setConvError(null); setConvSource(null); } },
     start: (path, mode, target, percent) => {
       if (converting) return;
-      setConverting(true); setConvResult(null); setConvError(null);
+      setConverting(true); setConvResult(null); setConvError(null); setConvSource(path); setConvMode(mode);
       void (mode === "format" ? convertFile(path, target) : compressFile(path, percent))
         .then(setConvResult)
         .catch((e) => { setConvError(errorText(e)); if (String(e) === "MISSING_TOOLS") refreshTools(); })
@@ -416,6 +421,8 @@ export default function App() {
     try {
       const current = await getVersion();
       const res = await fetch(RELEASES_API, { headers: { Accept: "application/vnd.github+json" } });
+      if (res.status === 404) { setUpdate({ status: `Versión ${current} · aún no hay versiones publicadas`, available: null, checking: false }); return; }
+      if (res.status === 403 || res.status === 429) { setUpdate({ status: "GitHub limitó las consultas; inténtalo más tarde.", available: null, checking: false }); return; }
       if (!res.ok) throw new Error(String(res.status));
       const tag = String((await res.json())?.tag_name ?? "");
       save("updateLastCheck", Date.now());
@@ -442,15 +449,6 @@ export default function App() {
   }, [checkUpdates]);
   const updateState: UpdateState = { ...update, check: () => void checkUpdates(true) };
 
-  // ── first-run tour (marked as seen the first time it shows, like the Mac) ──
-  const [tourStep, setTourStep] = useState<number | null>(null);
-  useEffect(() => {
-    if (expanded && tourStep === null && !load<boolean>("tourSeen", false)) {
-      save("tourSeen", true);
-      setTab("player");
-      setTourStep(0);
-    }
-  }, [expanded]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!expanded) setTourStep(null); }, [expanded]);
 
   // ── collapsed pill ──
@@ -489,10 +487,11 @@ export default function App() {
                 setFiles={setShelf}
                 addFiles={addToShelf}
                 lastClip={clips.find((c) => c.kind === "text") as { text: string } | undefined}
+                consumedClip={consumedClip}
                 dragging={dragging}
                 jobs={jobs}
                 withModal={withModal}
-                onConvert={(p) => { setConvertPath(p); setTab("convert"); }}
+                onConvert={(p) => { if (p !== convertPath) jobs.convert.clear(); setConvertPath(p); setTab("convert"); }}
               />
             )}
             {tab === "tools" && (

@@ -18,7 +18,15 @@ pub type OwnWrite = Arc<Mutex<Option<String>>>;
 pub static SKIP_NEXT_IMAGE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[allow(dead_code)]
-pub enum Read { Text(String), Image(Vec<u8>, &'static str), Private, Nothing }
+pub enum Read {
+    Text(String),
+    Image(Vec<u8>, &'static str),
+    /// Raw bitmap, converted to PNG only after the clipboard is closed again: holding it open
+    /// for a 4K conversion made other apps' pastes fail.
+    Dib(Vec<u8>),
+    Private,
+    Nothing,
+}
 
 /// Same per-image cap as the macOS app: one screenshot shouldn't eat the history.
 pub const MAX_IMAGE_BYTES: usize = 12 * 1024 * 1024;
@@ -127,9 +135,7 @@ mod win {
         }
         if available(CF_DIB) {
             // Raw pixels: a 4K screenshot is ~33 MB uncompressed, so the cap applies after PNG encoding.
-            if let Some(png) = bytes_of(CF_DIB, 128 * 1024 * 1024).and_then(|d| super::dib_to_bmp(&d)).and_then(|b| super::bmp_to_png(&b)) {
-                return Read::Image(png, "image/png");
-            }
+            if let Some(d) = bytes_of(CF_DIB, 128 * 1024 * 1024) { return Read::Dib(d); }
         }
         Read::Nothing
     }
@@ -170,6 +176,11 @@ pub fn start(app: AppHandle, own_write: OwnWrite) {
                 match cb.as_mut().and_then(|c| c.get_text().ok()) { Some(t) => Read::Text(t), None => Read::Nothing }
             };
 
+            // Clipboard is closed by now; the slow conversion happens here.
+            let read = match read {
+                Read::Dib(d) => match dib_to_bmp(&d).and_then(|b| bmp_to_png(&b)) { Some(png) => Read::Image(png, "image/png"), None => Read::Nothing },
+                other => other,
+            };
             let text = match read {
                 Read::Text(t) => t,
                 Read::Image(bytes, mime) => {

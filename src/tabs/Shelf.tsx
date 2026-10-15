@@ -14,12 +14,13 @@ export function Shelf(props: {
   setFiles: (f: string[]) => void;
   addFiles: (f: string[]) => void;
   lastClip: { text: string } | undefined;
+  consumedClip: { current: string | null };
   onConvert: (path: string) => void;
   dragging: boolean;
   jobs: Jobs;
   withModal: WithModal;
 }) {
-  const { files, setFiles, addFiles, lastClip, onConvert, dragging, jobs, withModal } = props;
+  const { files, setFiles, addFiles, lastClip, consumedClip, onConvert, dragging, jobs, withModal } = props;
   const [infos, setInfos] = useState<FileInfo[]>([]);
   const [link, setLink] = useState("");
   const [format, setFormat] = useState<"mp4" | "mp3">("mp4");
@@ -31,7 +32,11 @@ export function Shelf(props: {
     return () => { current = false; };
   }, [files]);
   // The workflow is "copy a link, open the shelf": offer it without pasting.
-  useEffect(() => { if (!link && lastClip && isSupportedLink(lastClip.text)) setLink(lastClip.text.trim()); }, [lastClip]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Offered once: after it's downloaded (or the field is cleared) the same copy isn't put back.
+  useEffect(() => {
+    const t = lastClip?.text.trim();
+    if (!link && t && isSupportedLink(t) && consumedClip.current !== t) { consumedClip.current = t; setLink(t); }
+  }, [lastClip]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const download = async () => {
     const url = link.trim();

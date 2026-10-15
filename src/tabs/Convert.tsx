@@ -13,8 +13,10 @@ export function Convert({ path, setPath, jobs, withModal }: {
   path: string | null; setPath: (p: string | null) => void; jobs: Jobs; withModal: WithModal;
 }) {
   const job = jobs.convert;
+  // Busy/result/error only belong on screen next to the file they were for.
+  const mine = job.source !== null && job.source === path;
   const [info, setInfo] = useState<FileInfo | null>(null);
-  const [mode, setMode] = useState<"format" | "compress">("format");
+  const [mode, setMode] = useState<"format" | "compress">(() => (job.busy ? job.mode : "format"));
   const [target, setTarget] = useState("");
   const [percent, setPercent] = useState("50");
   const [lookupError, setLookupError] = useState<string | null>(null);
@@ -31,15 +33,16 @@ export function Convert({ path, setPath, jobs, withModal }: {
 
   const pick = () => void withModal(async () => {
     const p = await open({ multiple: false, directory: false, title: "Elige el archivo a convertir" });
-    if (typeof p === "string") { job.clear(); setPath(p); }
+    if (typeof p === "string") setPath(p);
   });
 
   // Status line, same wording as the macOS Convert tab.
   let status: { text: string; tone: "muted" | "danger" | "green" } | null = null;
   if (lookupError) status = { text: lookupError, tone: "danger" };
-  else if (job.busy) status = { text: mode === "compress" ? "Comprimiendo…" : "Convirtiendo…", tone: "muted" };
-  else if (job.error) status = { text: job.error, tone: "danger" };
-  else if (job.result) {
+  else if (mine && job.busy) status = { text: job.mode === "compress" ? "Comprimiendo…" : "Convirtiendo…", tone: "muted" };
+  else if (job.busy) status = { text: "Hay otra conversión en curso; espera a que termine.", tone: "muted" };
+  else if (mine && job.error) status = { text: job.error, tone: "danger" };
+  else if (mine && job.result) {
     const pct = job.result.originalBytes > 0 ? Math.round((job.result.bytes / job.result.originalBytes) * 100) : null;
     status = { text: `✓ ${baseName(job.result.path)} · ${formatBytes(job.result.originalBytes)} → ${formatBytes(job.result.bytes)}${pct !== null ? ` (${pct} %)` : ""}`, tone: "green" };
   } else if (info && !info.exists) status = { text: "El archivo ya no existe.", tone: "danger" };
@@ -86,7 +89,7 @@ export function Convert({ path, setPath, jobs, withModal }: {
           </div>
         </div>
         {status && <div className={`small ${status.tone}`}>{status.text}</div>}
-        {job.result && !job.busy && (
+        {mine && job.result && !job.busy && (
           <button className="small-btn icon-text start" onClick={() => void revealFile(job.result!.path)}><FolderOpen size={13} />Mostrar en Explorador</button>
         )}
         {ffMissing.length > 0 && (

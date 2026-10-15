@@ -64,6 +64,8 @@ export function Currency() {
     return () => { alive = false; };
   }, [from, to]);
 
+  // Like the Mac, the next edit brings the full line back.
+  useEffect(() => { setOffline(false); }, [amount, taxOn, tax]);
   const d = currencyDisplay(amount, from, to, taxOn, tax, from === to ? null : rate);
   const status = offline ? "Sin conexión — no se pudo actualizar la tasa" : d.status;
 

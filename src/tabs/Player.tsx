@@ -48,13 +48,16 @@ export function Player({ media, art }: { media: MediaInfo | null; art: string | 
   }, [media, committed]);
   const duration = media?.duration ?? 0;
   const position = scrub ?? (committed ? committed.at + (media?.playing ? (Date.now() - committed.t) / 1000 : 0) : media?.position ?? 0);
-  const canSeek = !!media && media.canSeek && duration > 0;
+  // Some sessions say they can't seek and still do: only a refused seek counts.
+  const [refused, setRefused] = useState(false);
+  useEffect(() => setRefused(false), [media?.artworkKey]);
+  const canSeek = !!media && duration > 0;
   const commitSeek = () => {
     if (scrub === null) return;
     const at = scrub;
     setScrub(null);
     setCommitted({ at, t: Date.now() });
-    void mediaSeek(at);
+    void mediaSeek(at).then((ok) => { if (!ok) { setCommitted(null); setRefused(true); } });
   };
 
   // Three steps, like the macOS speaker icon.
@@ -91,7 +94,7 @@ export function Player({ media, art }: { media: MediaInfo | null; art: string | 
             step={0.5}
             value={Math.min(position, Math.max(1, duration))}
             disabled={!canSeek}
-            title={media && !media.canSeek ? "Esta app no permite adelantar" : undefined}
+            title={refused ? "Esta app no permite adelantar" : undefined}
             aria-label="Posición"
             onChange={(e) => setScrub(Number(e.target.value))}
             onPointerUp={commitSeek}

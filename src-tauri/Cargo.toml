@@ -1,6 +1,6 @@
 [package]
 name = "notchdrop"
-version = "0.3.0"
+version = "0.3.1"
 description = "A Dynamic Island for Windows: player, clipboard, alarms, currency and notes at the top of the screen."
 edition = "2021"
 license = "MIT"

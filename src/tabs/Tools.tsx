@@ -73,10 +73,8 @@ export function Tools(props: {
   const swRunning = stopwatch.running;
 
   const count = alarms.items.length;
-  const status = ringing
-    ? "✅ ¡ALARMA! — sonando…"
-    : notificationsDenied ? "Activa las notificaciones para usar alarmas"
-    : alarmMsg ?? (count === 0 ? "Sin alarma activa" : count === 1 ? "1 alarma activa" : `${count} alarmas activas`);
+  const base = alarmMsg ?? (count === 0 ? "Sin alarma activa" : count === 1 ? "1 alarma activa" : `${count} alarmas activas`);
+  const status = ringing ? "✅ ¡ALARMA! — sonando…" : notificationsDenied ? `${base} · Activa las notificaciones para usar alarmas` : base;
   const keyOf = (c: ClipItem) => (c.kind === "text" ? "t:" + c.text : "i:" + c.url.slice(-64));
   // Three rows, then "Ver más" — same as the macOS history.
   const visible = showAll ? clips : clips.slice(0, 3);

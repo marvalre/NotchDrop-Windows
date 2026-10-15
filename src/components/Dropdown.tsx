@@ -35,8 +35,11 @@ export function Dropdown<T extends string>({ value, options, onChange, label, di
     const outside = (e: MouseEvent) => {
       if (!list.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node)) setOpen(false);
     };
+    // The list is positioned on screen; scrolling the page under it would detach it from its button.
+    const scrolled = (e: Event) => { if (!list.current?.contains(e.target as Node)) setOpen(false); };
     document.addEventListener("mousedown", outside, true);
-    return () => document.removeEventListener("mousedown", outside, true);
+    document.addEventListener("scroll", scrolled, true);
+    return () => { document.removeEventListener("mousedown", outside, true); document.removeEventListener("scroll", scrolled, true); };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -50,6 +53,7 @@ export function Dropdown<T extends string>({ value, options, onChange, label, di
       if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(e.key)) { e.preventDefault(); setOpen(true); }
       return;
     }
+    if (e.key === "Tab") { setOpen(false); return; }
     // Keys while open belong to the list; Escape must not also close the island.
     e.stopPropagation();
     if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
