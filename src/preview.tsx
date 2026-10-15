@@ -6,7 +6,7 @@ const art = "data:image/svg+xml;utf8," + encodeURIComponent(
 let pos = 84;
 mockWindows("island");
 mockIPC((cmd, args) => {
-  if (cmd === "media_state") { pos += 1; return { title: "Passionfruit", artist: "Drake", album: "More Life", app: "Spotify.exe", playing: true, position: pos, duration: 298, artwork: art, artworkKey: "k" }; }
+  if (cmd === "media_state") { pos += 1; return { title: "Passionfruit", artist: "Drake", album: "More Life", app: "Spotify.exe", playing: true, position: pos, duration: 298, artwork: art, artworkKey: "k", canSeek: true }; }
   if (cmd === "plugin:notification|is_permission_granted") return true;
   if (cmd === "plugin:autostart|is_enabled") return false;
   if (cmd === "plugin:app|version") return "0.1.0";

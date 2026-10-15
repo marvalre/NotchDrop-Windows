@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
-import { AudioLines, Download, ExternalLink, Settings as Gear } from "lucide-react";
-import type { Browser, Jobs, Prefs } from "../App";
+import { AudioLines, Download, HelpCircle, RefreshCw, Settings as Gear } from "lucide-react";
+import type { Browser, Prefs, Jobs } from "../App";
 import { openSpecial, quitApp, setExpanded } from "../lib/api";
+import { save } from "../lib/store";
+import { Dropdown } from "../components/Dropdown";
 
 const SIZES: { label: string; value: number }[] = [
   { label: "Compacto", value: 0.85 },
@@ -12,12 +14,13 @@ const SIZES: { label: string; value: number }[] = [
   { label: "Amplio", value: 1.15 },
 ];
 
+// Same choices as the macOS app, minus Safari (not on Windows).
 const BROWSERS: { label: string; value: Browser }[] = [
-  { label: "Ninguno", value: "" },
-  { label: "Firefox", value: "firefox" },
-  { label: "Edge", value: "edge" },
+  { label: "Sin cookies", value: "" },
   { label: "Chrome", value: "chrome" },
+  { label: "Firefox", value: "firefox" },
   { label: "Brave", value: "brave" },
+  { label: "Edge", value: "edge" },
 ];
 
 function Toggle({ title, subtitle, checked, onChange }: { title: string; subtitle: string; checked: boolean; onChange: (v: boolean) => void }) {
@@ -29,7 +32,11 @@ function Toggle({ title, subtitle, checked, onChange }: { title: string; subtitl
   );
 }
 
-export function Settings({ prefs, setPrefs, clearClips, jobs }: { prefs: Prefs; setPrefs: (p: Prefs) => void; clearClips: () => void; jobs: Jobs }) {
+export interface UpdateState { status: string; available: string | null; checking: boolean; check: () => void; }
+
+export function Settings({ prefs, setPrefs, jobs, update, replayTour }: {
+  prefs: Prefs; setPrefs: (p: Prefs) => void; jobs: Jobs; update: UpdateState; replayTour: () => void;
+}) {
   const [autostart, setAutostart] = useState(false);
   const [version, setVersion] = useState("");
   const [audioSeen, setAudioSeen] = useState(false);
@@ -41,12 +48,18 @@ export function Settings({ prefs, setPrefs, clearClips, jobs }: { prefs: Prefs; 
     return () => { void un.then((f) => f()); };
   }, []);
 
+  const downloadStatus = jobs.installing
+    ? jobs.status?.text ?? "Instalando…"
+    : jobs.missing.length
+      ? `Faltan herramientas (${jobs.missing.join(", ")}). Pulsa «Instalar herramientas»: se descargan solas, sin Terminal.`
+      : "Listo. Las descargas van directo a Descargas.";
+
   return (
     <div className="scroll">
       <section className="card">
         <h3><Gear size={14} strokeWidth={2.4} /> General</h3>
         <Toggle
-          title="Iniciar con Windows"
+          title="Iniciar al iniciar sesión"
           subtitle="Abre NotchDrop automáticamente al entrar a Windows."
           checked={autostart}
           onChange={async (on) => {
@@ -56,19 +69,15 @@ export function Settings({ prefs, setPrefs, clearClips, jobs }: { prefs: Prefs; 
         />
         <Toggle
           title="Abrir al pasar el mouse por la isla"
-          subtitle="Si lo desactivas, haz clic en la isla o usa Ctrl + Alt + N."
+          subtitle="Si lo desactivas, haz clic en la isla (o Ctrl + Alt + N) para abrirla."
           checked={prefs.hoverOpen}
           onChange={(v) => setPrefs({ ...prefs, hoverOpen: v })}
         />
         <div className="toggle">
-          <span className="toggle-text"><span className="toggle-title">Tamaño del panel expandido</span><span className="muted small">Solo cambia qué tan grande se ve al abrirse.</span></span>
+          <span className="toggle-text"><span className="toggle-title">Tamaño del panel expandido</span><span className="muted small">La posición se ajusta sola a tu pantalla; esto es solo qué tan grande se ve.</span></span>
           <div className="seg">
             {SIZES.map((s) => (
-              <button
-                key={s.value}
-                className={prefs.panelSize === s.value ? "on" : ""}
-                onClick={() => { setPrefs({ ...prefs, panelSize: s.value }); void setExpanded(true, false, s.value); }}
-              >
+              <button key={s.value} className={prefs.panelSize === s.value ? "on" : ""} onClick={() => { setPrefs({ ...prefs, panelSize: s.value }); void setExpanded(true, false, s.value); }}>
                 {s.label}
               </button>
             ))}
@@ -76,46 +85,59 @@ export function Settings({ prefs, setPrefs, clearClips, jobs }: { prefs: Prefs; 
         </div>
         <Toggle
           title="Recordar portapapeles entre reinicios"
-          subtitle="Guarda el historial de texto en esta PC, sin cifrar. Las imágenes y las copias de gestores de contraseñas nunca se guardan."
+          subtitle="Guarda el historial de texto en disco. Las imágenes nunca se guardan."
           checked={prefs.persistClipboard}
           onChange={(v) => setPrefs({ ...prefs, persistClipboard: v })}
         />
-        <div className="row">
-          <span className="muted small">Atajo: <b>Ctrl + Alt + N</b> abre y cierra la isla desde cualquier app.</span>
-          <button className="small-btn" onClick={clearClips}>Borrar historial</button>
-        </div>
       </section>
 
       <section className="card">
         <h3 className="teal"><AudioLines size={14} strokeWidth={2.4} /> Audio en vivo</h3>
-        <span className="small">
-          {audioSeen ? "Activo — la onda sigue el audio de tu PC." : "Esperando audio… pon algo a sonar para ver la onda."}
-          <span className="muted"> Solo mide el volumen de salida; no graba nada.</span>
-        </span>
+        <span className="small">{audioSeen ? "Activo — detectando el audio del sistema." : "Esperando audio… pon algo a sonar para ver la onda."}</span>
       </section>
 
       <section className="card">
         <h3 className="blue"><Download size={14} strokeWidth={2.4} /> Descarga de links</h3>
-        <div className="toggle">
-          <span className="toggle-text"><span className="toggle-title">Cookies del navegador</span><span className="muted small">Para contenido que pide iniciar sesión. Chrome y Edge a veces no dejan leerlas; Firefox es lo más fiable.</span></span>
-          <select className="browser" value={prefs.cookies} onChange={(e) => setPrefs({ ...prefs, cookies: e.target.value as Browser })}>
-            {BROWSERS.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}
-          </select>
-        </div>
+        <span className="small muted">{downloadStatus}</span>
+        <span className="muted small">Cookies del navegador (para TikTok/Instagram bloqueados)</span>
         <div className="row">
-          <span className={`small ${jobs.missing.length ? "muted" : "green"}`}>
-            {jobs.installing ? jobs.status?.text : jobs.missing.length ? `Faltan herramientas: ${jobs.missing.join(", ")}.` : "✓ yt-dlp y ffmpeg instalados."}
-          </span>
+          <Dropdown value={prefs.cookies} options={BROWSERS} onChange={(v) => setPrefs({ ...prefs, cookies: v })} label="Cookies del navegador" width={140} />
           <div className="row-gap">
             {jobs.missing.length > 0 && <button className="small-btn primary" disabled={jobs.installing} onClick={jobs.install}>{jobs.installing ? "Instalando…" : "Instalar herramientas"}</button>}
-            <button className="small-btn icon-text" onClick={() => void openSpecial("downloads")}><ExternalLink size={12} />Abrir carpeta</button>
+            <button className="small-btn" onClick={() => void openSpecial("downloads")}>Abrir carpeta ↗</button>
           </div>
         </div>
       </section>
 
       <section className="card">
+        <h3 className="yellow"><HelpCircle size={14} strokeWidth={2.4} /> Ayuda</h3>
         <div className="row">
-          <span><b>NotchDrop para Windows</b> <span className="muted small">v{version}</span></span>
+          <span className="muted small">Un recorrido de 3 pasos por la isla.</span>
+          <button className="small-btn" onClick={replayTour}>Ver tutorial de nuevo</button>
+        </div>
+      </section>
+
+      <section className="card">
+        <h3 className="teal"><RefreshCw size={14} strokeWidth={2.4} /> Actualizaciones</h3>
+        <div className="row">
+          <span className={`small ${update.available ? "green" : "muted"}`}>{update.status}</span>
+          <div className="row-gap">
+            {update.available
+              ? <button className="small-btn primary" onClick={() => void openSpecial("release")}>Descargar {update.available}</button>
+              : <button className="small-btn" disabled={update.checking} onClick={update.check}>{update.checking ? "Buscando…" : "Buscar ahora"}</button>}
+          </div>
+        </div>
+        <Toggle
+          title="Buscar actualizaciones automáticamente"
+          subtitle="Una vez al día, en GitHub. Nunca se instala nada sin que lo descargues tú."
+          checked={prefs.autoUpdateCheck}
+          onChange={(v) => { setPrefs({ ...prefs, autoUpdateCheck: v }); save("updateLastCheck", 0); }}
+        />
+      </section>
+
+      <section className="card">
+        <div className="row">
+          <span><b>NotchDrop v{version}</b><br /><span className="muted small">Windows · Compilación local</span></span>
           <button className="small-btn danger" onClick={() => void quitApp()}>Salir de NotchDrop</button>
         </div>
       </section>

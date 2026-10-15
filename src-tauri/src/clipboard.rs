@@ -24,6 +24,19 @@ pub enum Read { Text(String), Image(Vec<u8>, &'static str), Private, Nothing }
 pub const MAX_IMAGE_BYTES: usize = 12 * 1024 * 1024;
 
 #[cfg_attr(not(windows), allow(dead_code))]
+/// Compressed images are what the history keeps (as on the Mac): a raw bitmap from
+/// PrintScreen is decoded and re-encoded as PNG before the size cap is applied.
+pub fn bmp_to_png(bmp: &[u8]) -> Option<Vec<u8>> {
+    let img = image::load_from_memory_with_format(bmp, image::ImageFormat::Bmp).ok()?;
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).ok()?;
+    Some(out.into_inner())
+}
+
+/// Text copies bigger than this never cross into the UI (it would drop them anyway).
+pub const MAX_TEXT_BYTES: usize = 1024 * 1024;
+
+#[cfg_attr(not(windows), allow(dead_code))]
 /// A CF_DIB (BITMAPINFOHEADER + pixels) becomes a .bmp file by prepending the 14-byte file
 /// header, whose only non-trivial field is where the pixel data starts.
 pub fn dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
@@ -93,11 +106,11 @@ mod win {
         Read::Text(text)
     }
 
-    unsafe fn bytes_of(fmt: u32) -> Option<Vec<u8>> {
+    unsafe fn bytes_of(fmt: u32, max: usize) -> Option<Vec<u8>> {
         let h = GetClipboardData(fmt).ok()?;
         let g = HGLOBAL(h.0);
         let n = GlobalSize(g);
-        if n == 0 || n > super::MAX_IMAGE_BYTES { return None; }
+        if n == 0 || n > max { return None; }
         let p = GlobalLock(g) as *const u8;
         if p.is_null() { return None; }
         let v = std::slice::from_raw_parts(p, n).to_vec();
@@ -110,10 +123,13 @@ mod win {
         const CF_DIB: u32 = 8;
         let png = RegisterClipboardFormatW(w!("PNG"));
         if available(png) {
-            if let Some(b) = bytes_of(png) { if b.starts_with(&[0x89, b'P', b'N', b'G']) { return Read::Image(b, "image/png"); } }
+            if let Some(b) = bytes_of(png, super::MAX_IMAGE_BYTES) { if b.starts_with(&[0x89, b'P', b'N', b'G']) { return Read::Image(b, "image/png"); } }
         }
         if available(CF_DIB) {
-            if let Some(bmp) = bytes_of(CF_DIB).and_then(|d| super::dib_to_bmp(&d)) { return Read::Image(bmp, "image/bmp"); }
+            // Raw pixels: a 4K screenshot is ~33 MB uncompressed, so the cap applies after PNG encoding.
+            if let Some(png) = bytes_of(CF_DIB, 128 * 1024 * 1024).and_then(|d| super::dib_to_bmp(&d)).and_then(|b| super::bmp_to_png(&b)) {
+                return Read::Image(png, "image/png");
+            }
         }
         Read::Nothing
     }
@@ -168,7 +184,7 @@ pub fn start(app: AppHandle, own_write: OwnWrite) {
                 }
                 _ => continue,
             };
-            if text.is_empty() || last_text.as_deref() == Some(text.as_str()) { continue; }
+            if text.is_empty() || text.len() > MAX_TEXT_BYTES || last_text.as_deref() == Some(text.as_str()) { continue; }
             last_text = Some(text.clone());
             let own = own_write.lock().map(|mut o| o.take()).unwrap_or(None);
             if own.as_deref() == Some(text.as_str()) { continue; }
@@ -192,6 +208,24 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bmp[10..14].try_into().unwrap()), 54);
         let img = image::load_from_memory(&bmp).unwrap();
         assert_eq!((img.width(), img.height()), (2, 1));
+        let png = bmp_to_png(&bmp).unwrap();
+        assert!(png.starts_with(&[0x89, b'P', b'N', b'G']));
+        assert_eq!(image::load_from_memory(&png).unwrap().width(), 2);
+    }
+
+    #[test]
+    fn a_big_screenshot_shrinks_under_the_cap_once_compressed() {
+        // 2560x1440 32-bit DIB of a flat colour: ~14.7 MB raw, a few KB as PNG.
+        let (w, h) = (2560u32, 1440u32);
+        let mut dib = vec![0u8; 40];
+        dib[0] = 40;
+        dib[4..8].copy_from_slice(&w.to_le_bytes());
+        dib[8..12].copy_from_slice(&h.to_le_bytes());
+        dib[12] = 1; dib[14] = 32;
+        dib.extend(std::iter::repeat([30u8, 30, 30, 255]).take((w * h) as usize).flatten());
+        assert!(dib.len() > MAX_IMAGE_BYTES, "raw is over the cap");
+        let png = dib_to_bmp(&dib).and_then(|b| bmp_to_png(&b)).unwrap();
+        assert!(png.len() < MAX_IMAGE_BYTES, "{} bytes", png.len());
     }
 
     #[test]

@@ -125,13 +125,17 @@ async fn copy_image(data_url: String) -> Result<(), String> {
         let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?.to_rgba8();
         let (w, h) = img.dimensions();
         clipboard::SKIP_NEXT_IMAGE.store(true, Ordering::Relaxed);
-        arboard::Clipboard::new()
+        let r = arboard::Clipboard::new()
             .and_then(|mut c| c.set_image(arboard::ImageData { width: w as usize, height: h as usize, bytes: img.into_raw().into() }))
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+        // If nothing was put on the clipboard, the next real copy must not be skipped.
+        if r.is_err() { clipboard::SKIP_NEXT_IMAGE.store(false, Ordering::Relaxed); }
+        r
     }).await.map_err(|e| e.to_string())?
 }
 
-/// Windows destinations the UI may open: the sound output picker, the Clock app, Downloads.
+/// Windows destinations the UI may open: the sound output picker, the Clock app, Downloads,
+/// and this app's latest release page.
 #[tauri::command]
 fn open_special(app: AppHandle, target: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
@@ -139,6 +143,7 @@ fn open_special(app: AppHandle, target: String) -> Result<(), String> {
         "sound" => app.opener().open_url("ms-settings:sound", None::<&str>).map_err(|e| e.to_string()),
         "clock" => app.opener().open_url("ms-clock:", None::<&str>).map_err(|e| e.to_string()),
         "downloads" => app.opener().open_path(downloads_dir(&app)?.to_string_lossy(), None::<&str>).map_err(|e| e.to_string()),
+        "release" => app.opener().open_url("https://github.com/marvalre/NotchDrop-Windows/releases/latest", None::<&str>).map_err(|e| e.to_string()),
         _ => Err("Destino no permitido.".into()),
     }
 }
@@ -233,17 +238,25 @@ async fn compress_file(app: AppHandle, path: String, percent: u32) -> Result<con
     tauri::async_runtime::spawn_blocking(move || convert::compress(&ffmpeg, &ffprobe, Path::new(&path), percent)).await.map_err(|e| e.to_string())?
 }
 
+const OPENABLE: [&str; 44] = [
+    "mp4", "mov", "m4v", "avi", "mkv", "webm", "flv", "wmv", "mpg", "mpeg",
+    "mp3", "m4a", "wav", "aac", "flac", "aiff", "aif", "ogg", "opus", "wma",
+    "png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "tif", "heic", "avif", "svg",
+    "pdf", "txt", "md", "rtf", "csv", "docx", "xlsx", "pptx", "doc", "xls", "ppt", "zip", "psd",
+];
+
 /// Opening and revealing go through Rust so the webview needs no broad file-system scope;
 /// only existing files are accepted.
 #[tauri::command]
 fn open_file(app: AppHandle, path: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     let p = Path::new(&path);
-    if !p.exists() { return Err("El archivo ya no existe.".into()); }
-    // The shelf opens media and documents, not programs: a path that came from the webview
-    // must never launch an executable or script.
-    const BLOCKED: [&str; 14] = ["exe", "bat", "cmd", "com", "scr", "ps1", "vbs", "vbe", "js", "jse", "wsf", "msi", "lnk", "hta"];
-    if BLOCKED.contains(&convert::ext_of(p).as_str()) { return Err("Por seguridad, NotchDrop no abre programas.".into()); }
+    if !p.is_file() { return Err("El archivo ya no existe.".into()); }
+    // The shelf opens media and documents, never programs or scripts: only these types open;
+    // anything else is shown in Explorer instead.
+    if !OPENABLE.contains(&convert::ext_of(p).as_str()) {
+        return app.opener().reveal_item_in_dir(p).map_err(|e| e.to_string());
+    }
     app.opener().open_path(path, None::<&str>).map_err(|e| e.to_string())
 }
 
@@ -326,9 +339,11 @@ pub fn run() {
                 let (mut level, mut sent, mut retry_at) = (0.0f32, -1.0f32, std::time::Instant::now());
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(80));
-                    if meter.is_none() && std::time::Instant::now() >= retry_at {
+                    // Re-bind to the default output every few seconds: switching to headphones
+                    // doesn't make the old device's meter fail, it just goes quiet.
+                    if std::time::Instant::now() >= retry_at {
                         meter = audio::Meter::open();
-                        retry_at = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                        retry_at = std::time::Instant::now() + std::time::Duration::from_secs(3);
                     }
                     let peak = match meter.as_ref().map(|m| m.peak()) { Some(Some(p)) => p, Some(None) => { meter = None; 0.0 } None => 0.0 };
                     level = audio::smooth(level, peak);

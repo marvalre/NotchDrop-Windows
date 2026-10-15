@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 export interface MediaInfo {
   title: string; artist: string; album: string; app: string;
   playing: boolean; position: number; duration: number;
-  artwork: string | null; artworkKey: string;
+  artwork: string | null; artworkKey: string; canSeek: boolean;
 }
 
 export const setExpanded = (expanded: boolean, focus = false, panel?: number) => invoke<void>("set_expanded", { expanded, focus, panel: panel ?? null });
@@ -16,7 +16,7 @@ export interface Volume { level: number; muted: boolean; }
 export const volumeGet = () => invoke<Volume | null>("volume_get");
 export const volumeSet = (level: number) => invoke<Volume | null>("volume_set", { level });
 export const volumeMute = (muted: boolean) => invoke<Volume | null>("volume_mute", { muted });
-export const openSpecial = (target: "sound" | "clock" | "downloads") => invoke<void>("open_special", { target });
+export const openSpecial = (target: "sound" | "clock" | "downloads" | "release") => invoke<void>("open_special", { target });
 export const quitApp = () => invoke<void>("quit_app");
 
 export type FileKind = "video" | "audio" | "image" | "unsupported";

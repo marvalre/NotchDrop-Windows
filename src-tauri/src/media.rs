@@ -16,6 +16,8 @@ pub struct MediaInfo {
     /// data: URL, only filled when the track changed since the last call (`artwork_key`).
     pub artwork: Option<String>,
     pub artwork_key: String,
+    /// Whether the playing app accepts seeking (some players don't).
+    pub can_seek: bool,
 }
 
 /// 100-ns ticks since 1601 (Windows FILETIME/DateTime) for "now".
@@ -73,7 +75,9 @@ mod imp {
         let artist = props.Artist().map(|h| h.to_string()).unwrap_or_default();
         let album = props.AlbumTitle().map(|h| h.to_string()).unwrap_or_default();
         let app = s.SourceAppUserModelId().map(|h| h.to_string()).unwrap_or_default();
-        let playing = s.GetPlaybackInfo().and_then(|i| i.PlaybackStatus()).map(|st| st == Status::Playing).unwrap_or(false);
+        let info = s.GetPlaybackInfo().ok();
+        let playing = info.as_ref().and_then(|i| i.PlaybackStatus().ok()).map(|st| st == Status::Playing).unwrap_or(false);
+        let can_seek = info.as_ref().and_then(|i| i.Controls().ok()).and_then(|c| c.IsPlaybackPositionEnabled().ok()).unwrap_or(false);
         let (mut position, mut duration) = (0.0, 0.0);
         if let Ok(tl) = s.GetTimelineProperties() {
             let pos = tl.Position().map(|t| t.Duration as f64 / 1e7).unwrap_or(0.0);
@@ -85,7 +89,7 @@ mod imp {
         }
         let key = format!("{title}\u{1f}{artist}\u{1f}{album}");
         let art = if key != known_key { artwork(&props) } else { None };
-        Some(MediaInfo { title, artist, album, app, playing, position, duration, artwork: art, artwork_key: key })
+        Some(MediaInfo { title, artist, album, app, playing, position, duration, artwork: art, artwork_key: key, can_seek })
     }
 
     pub fn seek(seconds: f64) -> bool {

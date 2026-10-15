@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Download, FolderOpen, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import { FolderOpen, RefreshCw, X } from "lucide-react";
 import type { Jobs, WithModal } from "../App";
-import { FileInfo, dragIcon, filesInfo, formatBytes, openFile, revealFile } from "../lib/api";
+import { FileInfo, dragIcon, filesInfo, formatBytes, openFile, openSpecial, revealFile } from "../lib/api";
 import { isSupportedLink } from "../lib/links";
 import { FileIcon } from "../components/FileIcon";
 
+/** Same layout as the macOS Shelf: "File Tray" title, the link downloader, then the tray
+ * with Clear / Upload Files and a horizontal strip of files. (AirDrop doesn't exist on Windows.) */
 export function Shelf(props: {
   files: string[];
   setFiles: (f: string[]) => void;
@@ -21,7 +23,7 @@ export function Shelf(props: {
   const [infos, setInfos] = useState<FileInfo[]>([]);
   const [link, setLink] = useState("");
   const [format, setFormat] = useState<"mp4" | "mp3">("mp4");
-  const [localError, setLocalError] = useState<string | null>(null);
+  const [localError, setLocalError] = useState<{ text: string; error?: boolean } | null>(null);
 
   useEffect(() => {
     let current = true; // ignore answers for a list that has since changed
@@ -31,12 +33,12 @@ export function Shelf(props: {
   // The workflow is "copy a link, open the shelf": offer it without pasting.
   useEffect(() => { if (!link && lastClip && isSupportedLink(lastClip.text)) setLink(lastClip.text.trim()); }, [lastClip]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const download = () => {
+  const download = async () => {
     const url = link.trim();
-    if (!isSupportedLink(url)) { setLocalError("Eso no parece un enlace válido."); return; }
+    if (!url) { setLocalError({ text: "Pega primero un enlace." }); return; }
+    if (!isSupportedLink(url)) { setLocalError({ text: "Eso no parece un enlace válido.", error: true }); return; }
     setLocalError(null);
-    jobs.download(url, format);
-    setLink("");
+    if (await jobs.download(url, format)) setLink("");
   };
 
   const upload = () => void withModal(async () => {
@@ -49,36 +51,40 @@ export function Shelf(props: {
     try { await startDrag({ item: [path], icon: await dragIcon() }); } catch { /* cancelled or unsupported */ }
   });
 
-  const status = localError ? { text: localError, error: true } : jobs.status;
+  // "Mostrar en Explorador": if the file is gone, open the Downloads folder instead (as on the Mac).
+  const reveal = (path: string) => void revealFile(path).catch(() => openSpecial("downloads"));
+
+  const status = localError ?? jobs.status;
   const busy = jobs.downloading || jobs.installing;
 
   return (
     <div className="shelf">
+      <div className="shelf-head">
+        <span className="shelf-title">File Tray</span>
+      </div>
       <div className="download-bar">
         <input
           className="link"
-          placeholder="Pega un link de TikTok, Instagram, X o YouTube"
+          placeholder="Pega un link de TikTok, Instagram, X, YouTube…"
           value={link}
           onChange={(e) => setLink(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !busy) download(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !busy) void download(); }}
         />
         <div className="seg">
           {(["mp4", "mp3"] as const).map((f) => (
             <button key={f} className={format === f ? "on" : ""} onClick={() => setFormat(f)}>{f.toUpperCase()}</button>
           ))}
         </div>
-        <button className="small-btn primary icon-text" disabled={busy} onClick={download}>
-          <Download size={14} />{jobs.downloading ? "Descargando…" : "Descargar"}
-        </button>
+        <button className="small-btn" disabled={busy} onClick={() => void download()}>Descargar</button>
       </div>
       {(status || jobs.missing.length > 0) && (
         <div className="row status-row">
-          <span className={`small ${status?.error ? "danger" : "muted"}`} title={status?.text}>
+          <span className={`small ${status?.error ? "danger" : status?.text.startsWith("✓") ? "green" : "muted"}`} title={status?.text}>
             {status?.text ?? "Para descargar videos faltan unas herramientas gratuitas (yt-dlp y ffmpeg)."}
           </span>
           <div className="row-gap">
-            {status?.path && !status.error && (
-              <button className="small-btn icon-text" onClick={() => void revealFile(status.path!)}><FolderOpen size={13} />Mostrar</button>
+            {jobs.status?.path && !jobs.status.error && !localError && (
+              <button className="small-btn" onClick={() => reveal(jobs.status!.path!)}>Mostrar en Explorador</button>
             )}
             {jobs.missing.length > 0 && (
               <button className="small-btn primary" disabled={jobs.installing} onClick={jobs.install}>
@@ -89,32 +95,31 @@ export function Shelf(props: {
         </div>
       )}
       <div className={`tray ${dragging ? "hot" : ""}`}>
-        {infos.length === 0 && <div className="tray-empty muted">{dragging ? "Suelta aquí" : "Arrastra archivos aquí"}</div>}
-        {infos.map((f) => (
-          <div
-            className={`tile ${f.exists ? "" : "gone"}`}
-            key={f.path}
-            title={f.path}
-            draggable={f.exists}
-            onDragStart={(e) => { e.preventDefault(); if (f.exists) drag(f.path); }}
-            onDoubleClick={() => { if (f.exists && !f.isDir) void openFile(f.path); }}
-          >
-            <div className="tile-icon"><FileIcon kind={f.kind} isDir={f.isDir} /></div>
-            <div className="tile-name">{f.name}</div>
-            <div className="tile-size muted">{!f.exists ? "ya no existe" : f.isDir ? "Carpeta" : formatBytes(f.bytes)}</div>
-            <div className="tile-actions">
-              {f.exists && <button title="Mostrar en la carpeta" aria-label="Mostrar en la carpeta" onClick={() => void revealFile(f.path)}><FolderOpen size={14} /></button>}
-              {f.exists && f.targets.length > 0 && <button title="Convertir" aria-label="Convertir" onClick={() => onConvert(f.path)}><RefreshCw size={14} /></button>}
-              <button title="Quitar de la bandeja" aria-label="Quitar de la bandeja" onClick={() => setFiles(files.filter((x) => x !== f.path))}><X size={14} /></button>
+        <div className="tray-strip">
+          {infos.length === 0 && <div className="tray-empty muted">{dragging ? "Suelta aquí" : "Drag & Drop Files Here"}</div>}
+          {infos.map((f) => (
+            <div
+              className={`tile ${f.exists ? "" : "gone"}`}
+              key={f.path}
+              title={`${f.path}\nDoble clic para abrir · arrástralo a otra app`}
+              draggable={f.exists}
+              onDragStart={(e) => { e.preventDefault(); if (f.exists) drag(f.path); }}
+              onDoubleClick={() => { if (f.exists && !f.isDir) void openFile(f.path); }}
+            >
+              <button className="tile-remove" title="Quitar" aria-label={`Quitar ${f.name}`} onClick={() => setFiles(files.filter((x) => x !== f.path))}><X size={11} /></button>
+              <div className="tile-icon"><FileIcon kind={f.kind} isDir={f.isDir} size={28} /></div>
+              <div className="tile-name">{f.name}</div>
+              <div className="tile-size muted">{!f.exists ? "ya no existe" : f.isDir ? "Carpeta" : formatBytes(f.bytes)}</div>
+              <div className="tile-actions">
+                {f.exists && <button title="Mostrar en Explorador" aria-label="Mostrar en Explorador" onClick={() => reveal(f.path)}><FolderOpen size={13} /></button>}
+                {f.exists && f.targets.length > 0 && <button title="Convertir" aria-label="Convertir" onClick={() => onConvert(f.path)}><RefreshCw size={13} /></button>}
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
-      <div className="row">
-        <span className="muted small">{infos.length ? "Arrastra un archivo hacia otra app · doble clic para abrir" : ""}</span>
-        <div className="row-gap">
-          <button className="small-btn icon-text" onClick={upload}><Upload size={13} />Subir archivos</button>
-          {infos.length > 0 && <button className="small-btn icon-text" onClick={() => setFiles([])}><Trash2 size={13} />Vaciar</button>}
+          ))}
+        </div>
+        <div className="tray-buttons">
+          <button className="small-btn" disabled={infos.length === 0} onClick={() => setFiles([])}>Clear</button>
+          <button className="small-btn" onClick={upload}>Upload Files</button>
         </div>
       </div>
     </div>

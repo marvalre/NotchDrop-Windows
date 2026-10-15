@@ -4,7 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { AlarmClock, Banknote, Bell, Inbox, Music, NotebookPen, RefreshCw, Settings as Gear, Zap } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { MediaInfo, baseName, downloadMedia, errorText, installTools, mediaState, setExpanded, toolsStatus } from "./lib/api";
+import { Done, MediaInfo, baseName, compressFile, convertFile, downloadMedia, errorText, filesInfo, installTools, mediaState, setExpanded, toolsStatus } from "./lib/api";
 import { AlarmStore, pillText } from "./lib/alarms";
 import { startAlarmTone, stopAlarmTone } from "./lib/alarmTone";
 import { ClipItem, ClipboardHistory } from "./lib/clipboard";
@@ -17,7 +17,10 @@ import { Tools } from "./tabs/Tools";
 import { Notes } from "./tabs/Notes";
 import { Convert } from "./tabs/Convert";
 import { Currency } from "./tabs/Currency";
-import { Settings } from "./tabs/Settings";
+import { Settings, UpdateState } from "./tabs/Settings";
+import { Tour, TOUR_STEPS } from "./components/Tour";
+import { RELEASES_API, isNewer } from "./lib/version";
+import { getVersion } from "@tauri-apps/api/app";
 
 export type Tab = "player" | "shelf" | "tools" | "notes" | "convert" | "currency" | "settings";
 // Same tabs and order as the macOS app; line icons, like its SF Symbols.
@@ -31,8 +34,8 @@ const TABS: { id: Tab; label: string; Icon: LucideIcon }[] = [
 ];
 
 export type Browser = "" | "firefox" | "edge" | "chrome" | "brave";
-export interface Prefs { hoverOpen: boolean; persistClipboard: boolean; panelSize: number; cookies: Browser; }
-const DEFAULT_PREFS: Prefs = { hoverOpen: true, persistClipboard: false, panelSize: 1, cookies: "" };
+export interface Prefs { hoverOpen: boolean; persistClipboard: boolean; panelSize: number; cookies: Browser; autoUpdateCheck: boolean; }
+const DEFAULT_PREFS: Prefs = { hoverOpen: true, persistClipboard: false, panelSize: 1, cookies: "", autoUpdateCheck: true };
 
 /** Long-running jobs live here, not in the tabs, so collapsing the island or switching tabs
  * neither loses their result nor lets the same job start twice. */
@@ -42,8 +45,20 @@ export interface Jobs {
   downloading: boolean;
   status: { text: string; error?: boolean; path?: string } | null;
   install: () => void;
-  download: (url: string, format: "mp4" | "mp3") => void;
+  /** Resolves true on success, so the Shelf only clears the link when it worked. */
+  download: (url: string, format: "mp4" | "mp3") => Promise<boolean>;
   refreshTools: () => void;
+  convert: ConvertJob;
+}
+
+/** The Convert tab's job, kept here so collapsing mid-conversion neither loses the result
+ * nor lets a second ffmpeg start on the same file. */
+export interface ConvertJob {
+  busy: boolean;
+  result: Done | null;
+  error: string | null;
+  start: (path: string, mode: "format" | "compress", target: string, percent: number) => void;
+  clear: () => void;
 }
 
 /** Wraps something that opens a native dialog or starts a system drag: while it runs, the
@@ -58,19 +73,42 @@ function timeOf(ms: number) {
 }
 
 /** Live waveform bars driven by the real output level (the Rust side reads the peak meter). */
-function Bars({ playing }: { playing: boolean }) {
+function Bars({ level }: { level: number }) {
+  const shape = [0.55, 0.9, 0.7, 1, 0.6];
+  return (
+    <span className="bars" aria-hidden>
+      {shape.map((k, i) => (
+        <i key={i} style={{ height: `${4 + Math.min(1, level * k * (0.85 + 0.3 * ((i * 37 + Math.round(level * 50)) % 7) / 7)) * 14}px` }} />
+      ))}
+    </span>
+  );
+}
+
+/** The collapsed island, laid out like the macOS notch pills: artwork on the left while
+ * something plays, the live waveform on the right whenever the PC is making sound (with or
+ * without a media session), only the countdown while an alarm is set, a bell while it rings. */
+function Pill({ media, art, alarmText, ringing, onStop }: {
+  media: MediaInfo | null; art: string | null; alarmText: string | null; ringing: boolean; onStop: () => void;
+}) {
   const [level, setLevel] = useState(0);
   useEffect(() => {
     const un = listen<number>("audio-level", (e) => setLevel(e.payload));
     return () => { void un.then((f) => f()); };
   }, []);
-  const shape = [0.55, 0.9, 0.7, 1, 0.6];
+  if (ringing) {
+    return <button className="pill-content pill-alarm ringing" onClick={onStop} aria-label="Detener alarma" title="Detener alarma"><Bell size={16} /></button>;
+  }
+  const playing = !!media && media.playing;
+  const audible = level > 0.02;
   return (
-    <span className="bars" aria-hidden>
-      {shape.map((k, i) => (
-        <i key={i} style={{ height: `${4 + Math.min(1, (playing ? level : 0) * k * (0.85 + 0.3 * ((i * 37 + Math.round(level * 50)) % 7) / 7)) * 14}px` }} />
-      ))}
-    </span>
+    <div className="pill-content split">
+      <span className="pill-left">
+        {playing && (art ? <img className="pill-art" src={art} alt="" /> : <span className="pill-art placeholder"><Music size={13} /></span>)}
+      </span>
+      <span className="pill-right">
+        {alarmText ? <span className="pill-alarm mono row-start"><AlarmClock size={14} />{alarmText}</span> : audible ? <Bars level={level} /> : null}
+      </span>
+    </div>
   );
 }
 
@@ -91,11 +129,19 @@ export default function App() {
   const [clips, setClips] = useState<ClipItem[]>(() => (prefs.persistClipboard ? ClipboardHistory.restore(load<unknown>("clipboard", [])).items : []));
   const [shelf, setShelfState] = useState<string[]>(() => load<string[]>("shelf", []));
   const setShelf = useCallback((f: string[]) => { setShelfState(f); save("shelf", f); }, []);
+  // New files go to the end, like the macOS shelf.
   const addToShelf = useCallback((paths: string[]) => setShelfState((prev) => {
-    const n = [...paths, ...prev.filter((x) => !paths.includes(x))];
+    const n = [...prev.filter((x) => !paths.includes(x)), ...paths];
     save("shelf", n);
     return n;
   }), []);
+  // Files moved or deleted since last time are dropped when the app starts (as on the Mac).
+  useEffect(() => {
+    void filesInfo(load<string[]>("shelf", [])).then((infos) => {
+      const keep = infos.filter((i) => i.exists).map((i) => i.path);
+      setShelfState((prev) => { const n = prev.filter((p) => keep.includes(p) || !infos.some((i) => i.path === p)); save("shelf", n); return n; });
+    }).catch(() => {});
+  }, []);
   const [convertPath, setConvertPath] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -147,8 +193,12 @@ export default function App() {
   const withModal: WithModal = useCallback(async (fn) => {
     modalOpen.current += 1;
     cancelLeave();
-    try { return await fn(); } finally { modalOpen.current -= 1; }
-  }, []);
+    try { return await fn(); } finally {
+      modalOpen.current -= 1;
+      // The dialog or drag is over: if the pointer isn't on the island anymore, close as usual.
+      if (modalOpen.current === 0 && expandedRef.current && !hovering.current && leaveCollapses(cs.current)) scheduleLeave();
+    }
+  }, [scheduleLeave]);
 
   useEffect(() => {
     const un = listen("toggle-island", () => {
@@ -225,29 +275,57 @@ export default function App() {
   useEffect(() => {
     refreshTools();
     const a = listen<string>("tools-progress", (e) => setJobStatus({ text: e.payload }));
-    const b = listen<number>("download-retry", (e) => setJobStatus({ text: `Reintentando (${e.payload}/6)…` }));
+    const b = listen<number>("download-retry", (e) => setJobStatus({ text: `Reintentando ${e.payload}/6…` }));
     return () => { void a.then((f) => f()); void b.then((f) => f()); };
   }, [refreshTools]);
+  const [converting, setConverting] = useState(false);
+  const [convResult, setConvResult] = useState<Done | null>(null);
+  const [convError, setConvError] = useState<string | null>(null);
+  const convert: ConvertJob = {
+    busy: converting, result: convResult, error: convError,
+    clear: () => { setConvResult(null); setConvError(null); },
+    start: (path, mode, target, percent) => {
+      if (converting) return;
+      setConverting(true); setConvResult(null); setConvError(null);
+      void (mode === "format" ? convertFile(path, target) : compressFile(path, percent))
+        .then(setConvResult)
+        .catch((e) => { setConvError(errorText(e)); if (String(e) === "MISSING_TOOLS") refreshTools(); })
+        .finally(() => setConverting(false));
+    },
+  };
   const jobs: Jobs = {
-    missing, installing, downloading, status: jobStatus, refreshTools,
+    missing, installing, downloading, status: jobStatus, refreshTools, convert,
     install: () => {
       if (installing) return;
       setInstalling(true);
       setJobStatus({ text: "Descargando herramientas (~75 MB)…" });
       void installTools()
         .then(() => toolsStatus())
-        .then((s) => { setMissing(s.missing); setJobStatus({ text: s.missing.length ? "Faltan: " + s.missing.join(", ") : "✓ Herramientas instaladas" }); })
+        .then((s) => { setMissing(s.missing); setJobStatus({ text: s.missing.length ? "Faltan: " + s.missing.join(", ") : "✓ Herramientas instaladas. Pulsa Descargar de nuevo." }); })
         .catch((e) => setJobStatus({ text: errorText(e), error: true }))
         .finally(() => setInstalling(false));
     },
-    download: (url, format) => {
-      if (downloading) return;
+    download: async (url, format) => {
+      if (downloading) return false;
       setDownloading(true);
-      setJobStatus({ text: "Descargando…" });
-      void downloadMedia(url, format, prefsRef.current.cookies || null)
-        .then((path) => { addToShelf([path]); setJobStatus({ text: `✓ ${baseName(path)} está en Descargas`, path }); })
-        .catch((e) => { setJobStatus({ text: errorText(e), error: true }); if (String(e) === "MISSING_TOOLS") refreshTools(); })
-        .finally(() => setDownloading(false));
+      setJobStatus({ text: format === "mp3" ? "Extrayendo audio…" : "Descargando…" });
+      try {
+        const path = await downloadMedia(url, format, prefsRef.current.cookies || null);
+        addToShelf([path]);
+        setJobStatus({ text: `✓ Guardado en Descargas · ${baseName(path)}`, path });
+        return true;
+      } catch (e) {
+        if (String(e) === "MISSING_TOOLS") {
+          const st = await toolsStatus().catch(() => ({ missing: missing }));
+          setMissing(st.missing);
+          setJobStatus({ text: st.missing.includes("yt-dlp") ? "Falta yt-dlp, que hace la descarga." : "Faltan las herramientas de conversión (ffmpeg). Pulsa «Instalar herramientas».", error: true });
+        } else {
+          setJobStatus({ text: errorText(e), error: true });
+        }
+        return false;
+      } finally {
+        setDownloading(false);
+      }
     },
   };
 
@@ -290,9 +368,12 @@ export default function App() {
   useEffect(() => { save("prefs", prefs); }, [prefs]);
 
   // ── notifications permission ──
+  const [notificationsDenied, setNotificationsDenied] = useState(false);
   useEffect(() => {
     void (async () => {
-      try { if (!(await isPermissionGranted())) await requestPermission(); } catch { /* not available */ }
+      try {
+        if (!(await isPermissionGranted())) setNotificationsDenied((await requestPermission()) === "denied");
+      } catch { /* not available */ }
     })();
   }, []);
 
@@ -328,44 +409,71 @@ export default function App() {
   }, [now, ringingSince, stopRinging]);
   useEffect(() => { save("alarms", alarms.toJSON()); }, [alarms]);
 
+  // ── updates: once a day (if enabled) or on demand, tell when a newer release exists ──
+  const [update, setUpdate] = useState<{ status: string; available: string | null; checking: boolean }>({ status: "", available: null, checking: false });
+  const checkUpdates = useCallback(async (manual: boolean) => {
+    setUpdate((u) => ({ ...u, checking: true }));
+    try {
+      const current = await getVersion();
+      const res = await fetch(RELEASES_API, { headers: { Accept: "application/vnd.github+json" } });
+      if (!res.ok) throw new Error(String(res.status));
+      const tag = String((await res.json())?.tag_name ?? "");
+      save("updateLastCheck", Date.now());
+      if (isNewer(tag, current)) {
+        const v = tag.replace(/^v/i, "");
+        setUpdate({ status: `Hay una versión nueva: ${v}`, available: v, checking: false });
+        if (!manual) try { sendNotification({ title: "NotchDrop", body: `Hay una versión nueva (${v}). Ábrela desde Ajustes → Actualizaciones.` }); } catch { /* ignore */ }
+      } else {
+        setUpdate({ status: `Versión ${current} · estás al día`, available: null, checking: false });
+      }
+    } catch {
+      setUpdate({ status: "No se pudo buscar ahora (sin conexión).", available: null, checking: false });
+    }
+  }, []);
+  useEffect(() => {
+    void getVersion().then((v) => setUpdate((u) => (u.status ? u : { ...u, status: `Versión ${v}` }))).catch(() => {});
+    const tick = () => {
+      if (!prefsRef.current.autoUpdateCheck) return;
+      if (Date.now() - load<number>("updateLastCheck", 0) > 24 * 3600 * 1000) void checkUpdates(false);
+    };
+    const first = window.setTimeout(tick, 15_000);
+    const id = window.setInterval(tick, 3600 * 1000);
+    return () => { clearTimeout(first); clearInterval(id); };
+  }, [checkUpdates]);
+  const updateState: UpdateState = { ...update, check: () => void checkUpdates(true) };
+
+  // ── first-run tour (marked as seen the first time it shows, like the Mac) ──
+  const [tourStep, setTourStep] = useState<number | null>(null);
+  useEffect(() => {
+    if (expanded && tourStep === null && !load<boolean>("tourSeen", false)) {
+      save("tourSeen", true);
+      setTab("player");
+      setTourStep(0);
+    }
+  }, [expanded]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!expanded) setTourStep(null); }, [expanded]);
+
   // ── collapsed pill ──
   const ringing = ringingSince !== null;
   const nextAlarm = alarms.next;
-  let pill: JSX.Element;
-  if (ringing) {
-    pill = <button className="pill-content pill-alarm ringing" onClick={stopRinging}><Bell size={15} /> Detener alarma</button>;
-  } else if (nextAlarm) {
-    pill = (
-      <div className="pill-content pill-alarm">
-        <AlarmClock size={15} />
-        <span className="mono">{pillText((nextAlarm.end - now) / 1000, alarms.items.length)}</span>
-        {media && <span className="pill-title">{media.title}</span>}
-      </div>
-    );
-  } else if (media) {
-    pill = (
-      <div className="pill-content">
-        {art ? <img className="pill-art" src={art} alt="" /> : <span className="pill-art placeholder"><Music size={13} /></span>}
-        <span className="pill-title">{media.title}</span>
-        <Bars playing={media.playing} />
-      </div>
-    );
-  } else {
-    pill = <div className="pill-content idle"><span className="dot" /></div>;
-  }
+  const alarmText = nextAlarm ? pillText((nextAlarm.end - now) / 1000, alarms.items.length) : null;
 
   return (
     <div className={`island ${expanded ? "expanded" : "collapsed"}`} onMouseEnter={onEnter} onMouseLeave={onLeave}>
-      {!expanded && <div className="pill" onClick={() => { if (!ringing) void expand(true); }}>{pill}</div>}
+      {!expanded && (
+        <div className="pill" onClick={() => { if (!ringing) void expand(true); }}>
+          <Pill media={media} art={art} alarmText={alarmText} ringing={ringing} onStop={stopRinging} />
+        </div>
+      )}
       {expanded && (
         <div className="panel">
-          <nav className="tabs">
+          <nav className="tabs" data-tour="tabs">
             {TABS.map(({ id, label, Icon }) => (
-              <button key={id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
+              <button key={id} data-tour={id === "shelf" ? "shelf" : undefined} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
                 <Icon size={15} strokeWidth={2.2} />{label}
               </button>
             ))}
-            <button className={`gear ${tab === "settings" ? "on" : ""}`} onClick={() => setTab("settings")} title="Ajustes" aria-label="Ajustes"><Gear size={17} /></button>
+            <button data-tour="settings" className={`gear ${tab === "settings" ? "on" : ""}`} onClick={() => setTab("settings")} title="Ajustes" aria-label="Ajustes"><Gear size={17} /></button>
           </nav>
           {ringing && (
             <div className="ring-banner">
@@ -399,13 +507,21 @@ export default function App() {
                 setAlarmMsg={setAlarmMsg}
                 stopwatch={stopwatch}
                 setStopwatch={setStopwatch}
+                notificationsDenied={notificationsDenied}
               />
             )}
             {tab === "notes" && <Notes />}
-            {tab === "convert" && <Convert path={convertPath} setPath={setConvertPath} addToShelf={(p) => addToShelf([p])} jobs={jobs} withModal={withModal} />}
+            {tab === "convert" && <Convert path={convertPath} setPath={setConvertPath} jobs={jobs} withModal={withModal} />}
             {tab === "currency" && <Currency />}
-            {tab === "settings" && <Settings prefs={prefs} setPrefs={setPrefs} clearClips={() => setClips([])} jobs={jobs} />}
+            {tab === "settings" && <Settings prefs={prefs} setPrefs={setPrefs} jobs={jobs} update={updateState} replayTour={() => { setTab("player"); setTourStep(0); }} />}
           </div>
+          {tourStep !== null && (
+            <Tour
+              step={tourStep}
+              onSkip={() => setTourStep(null)}
+              onNext={() => setTourStep(tourStep + 1 < TOUR_STEPS.length ? tourStep + 1 : null)}
+            />
+          )}
         </div>
       )}
     </div>

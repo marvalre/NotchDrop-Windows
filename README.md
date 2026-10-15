@@ -19,7 +19,9 @@ Versión MVP, hecha con Tauri 2 (Rust + interfaz web). La versión de Mac vive e
 
 **Herramientas con un clic.** Descargar y convertir video/audio usan [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Unlicense) y las compilaciones estáticas de ffmpeg de [eugeneware/ffmpeg-static](https://github.com/eugeneware/ffmpeg-static) (GPL). No vienen dentro de la app: el botón **Instalar herramientas** las descarga (~75 MB) a la carpeta de la app, sin Terminal ni permisos de administrador, y verifica cada una con SHA-256 antes de guardarla (las de ffmpeg con hashes fijados en el código; la de yt-dlp con el `SHA2-256SUMS` de su release). Si ya las tienes en el PATH, usa esas.
 
-Aún no: PDF a imágenes, HEIC, AirDrop (no existe en Windows), tutorial de bienvenida y actualización automática.
+**Actualizaciones.** La app revisa una vez al día (se puede apagar) si hay una versión nueva en GitHub y avisa; el botón abre la página de descarga. La instalación con un clic necesita configurar una llave de firma en GitHub; todavía no está activada.
+
+Aún no: PDF a imágenes, HEIC, AirDrop (no existe en Windows), botón "Detener" dentro de la notificación de alarma, e instalación de actualizaciones con un clic.
 
 ## Desarrollo
 

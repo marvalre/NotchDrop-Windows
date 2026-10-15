@@ -35,11 +35,15 @@ export function Tools(props: {
   setAlarmMsg: (m: string | null) => void;
   stopwatch: Stopwatch;
   setStopwatch: (s: Stopwatch) => void;
+  notificationsDenied: boolean;
 }) {
-  const { clips, alarms, setAlarms, now, ringing, stopRinging, alarmMsg, setAlarmMsg, stopwatch, setStopwatch } = props;
-  const [copied, setCopied] = useState<number | null>(null);
+  const { clips, alarms, setAlarms, now, ringing, stopRinging, alarmMsg, setAlarmMsg, stopwatch, setStopwatch, notificationsDenied } = props;
+  // Keyed by the item itself, so a new copy arriving during the second of feedback doesn't
+  // move "Copied!" to another row.
+  const [copied, setCopied] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const [time, setTime] = useState(() => {
-    const d = new Date(Date.now() + 30 * 60_000);
+    const d = new Date();
     return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
   });
 
@@ -69,15 +73,21 @@ export function Tools(props: {
   const swRunning = stopwatch.running;
 
   const count = alarms.items.length;
-  const status = ringing ? "✅ ¡ALARMA! — sonando…" : alarmMsg ?? (count === 0 ? "Sin alarma activa" : count === 1 ? "1 alarma activa" : `${count} alarmas activas`);
+  const status = ringing
+    ? "✅ ¡ALARMA! — sonando…"
+    : notificationsDenied ? "Activa las notificaciones para usar alarmas"
+    : alarmMsg ?? (count === 0 ? "Sin alarma activa" : count === 1 ? "1 alarma activa" : `${count} alarmas activas`);
+  const keyOf = (c: ClipItem) => (c.kind === "text" ? "t:" + c.text : "i:" + c.url.slice(-64));
+  // Three rows, then "Ver más" — same as the macOS history.
+  const visible = showAll ? clips : clips.slice(0, 3);
 
   return (
     <div className="scroll">
       <section className="card">
-        <h3 className="violet"><Clipboard size={14} strokeWidth={2.4} /> Portapapeles</h3>
+        <h3 className="indigo"><Clipboard size={14} strokeWidth={2.4} /> Clipboard History</h3>
         {clips.length === 0 && <div className="muted small">Copia texto o una imagen para verlos aquí.</div>}
-        {clips.slice(0, 6).map((c, i) => (
-          <div className="row" key={(c.kind === "text" ? c.text : c.url).slice(0, 200) + i}>
+        {visible.map((c) => (
+          <div className="row" key={keyOf(c)}>
             {c.kind === "text" ? (
               <span className="clip" title={preview(c.text)}>{preview(c.text)}</span>
             ) : (
@@ -86,19 +96,23 @@ export function Tools(props: {
             <button
               className="small-btn"
               onClick={async () => {
-                try { if (c.kind === "text") await copyText(c.text); else await copyImage(c.url); setCopied(i); setTimeout(() => setCopied(null), 1000); } catch { /* clipboard busy */ }
+                const k = keyOf(c);
+                try { if (c.kind === "text") await copyText(c.text); else await copyImage(c.url); setCopied(k); setTimeout(() => setCopied((x) => (x === k ? null : x)), 1000); } catch { /* clipboard busy */ }
               }}
             >
-              {copied === i ? "¡Copiado!" : "Copiar"}
+              {copied === keyOf(c) ? "Copied!" : "Copy"}
             </button>
           </div>
         ))}
+        {clips.length > 3 && (
+          <button className="link-btn" onClick={() => setShowAll(!showAll)}>{showAll ? "Ver menos" : `Ver más (${clips.length - 3})`}</button>
+        )}
       </section>
 
       <section className="card">
         <div className="row">
-          <h3 className="green"><AlarmClock size={14} strokeWidth={2.4} /> Alarmas</h3>
-          <button className="small-btn icon-text" onClick={() => void openSpecial("clock")}><ExternalLink size={12} />Abrir Reloj</button>
+          <h3 className="green"><AlarmClock size={14} strokeWidth={2.4} /> Native Alarms</h3>
+          <button className="small-btn icon-text" onClick={() => void openSpecial("clock")}>Open Clock<ExternalLink size={12} /></button>
         </div>
         <div className="presets">
           {PRESETS.map((m) => (
@@ -118,7 +132,7 @@ export function Tools(props: {
           </button>
         </div>
         <div className="row">
-          <span className={ringing ? "green" : "muted"}>{status}</span>
+          <span className={ringing ? "green" : notificationsDenied ? "danger" : "muted"}>{status}</span>
           {ringing && <button className="small-btn danger" onClick={stopRinging}>Detener</button>}
         </div>
         {alarms.items.map((a) => {
@@ -133,7 +147,7 @@ export function Tools(props: {
       </section>
 
       <section className="card">
-        <h3 className="orange"><Timer size={14} strokeWidth={2.4} /> Cronómetro</h3>
+        <h3 className="orange"><Timer size={14} strokeWidth={2.4} /> Stopwatch</h3>
         <div className="row">
           <span className="stopwatch mono">{stopwatchText(swElapsed)}</span>
           <div className="row-gap">
@@ -144,9 +158,9 @@ export function Tools(props: {
                 setStopwatch(swRunning ? pause(stopwatch, t) : start(stopwatch, t));
               }}
             >
-              {swRunning ? "Pausar" : "Iniciar"}
+              {swRunning ? "Pause" : "Start"}
             </button>
-            <button className="small-btn" onClick={() => setStopwatch({ running: false, startedAt: 0, accumulated: 0 })}>Reiniciar</button>
+            <button className="small-btn" onClick={() => setStopwatch({ running: false, startedAt: 0, accumulated: 0 })}>Reset</button>
           </div>
         </div>
       </section>
