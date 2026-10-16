@@ -50,7 +50,10 @@ jobs:
         working-directory: src-tauri
         run: cargo test -- --nocapture
 
-      - name: Build installers
+      - name: Build installers (signed for the in-app updater)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build
 
       - name: Upload installers
@@ -67,12 +70,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          files=(src-tauri/target/release/bundle/nsis/*.exe src-tauri/target/release/bundle/msi/*.msi)
+          set -euo pipefail
+          exe=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe)
+          sig="$exe.sig"
+          [ -s "$sig" ] || { echo "Falta la firma del instalador ($sig): ¿están los secretos de firma?"; exit 1; }
+          version="${GITHUB_REF_NAME#v}"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$(basename "$exe")"
+          # What installed copies read to find, verify and install this version.
+          node -e '
+            const fs = require("fs");
+            const [version, url, sigPath] = process.argv.slice(1);
+            fs.writeFileSync("latest.json", JSON.stringify({
+              version, notes: "NotchDrop para Windows " + version, pub_date: new Date().toISOString(),
+              platforms: { "windows-x86_64": { signature: fs.readFileSync(sigPath, "utf8").trim(), url } },
+            }, null, 2));' "$version" "$url" "$sig"
+          files=("$exe" "$sig" src-tauri/target/release/bundle/msi/*.msi latest.json)
           # Re-running the workflow for a tag whose release already exists must not fail.
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --clobber
           else
             gh release create "${GITHUB_REF_NAME}" "${files[@]}" \
               --title "NotchDrop para Windows ${GITHUB_REF_NAME}" \
-              --notes "Instalador para Windows 10/11. Descarga el .exe y ábrelo."
+              --notes "Instalador para Windows 10/11. Descarga el .exe y ábrelo. Desde la 0.4.0, la app se actualiza sola con un clic (Ajustes → Actualizaciones)."
           fi

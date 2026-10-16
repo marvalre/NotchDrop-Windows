@@ -1,6 +1,6 @@
 [package]
 name = "notchdrop"
-version = "0.3.1"
+version = "0.4.0"
 description = "A Dynamic Island for Windows: player, clipboard, alarms, currency and notes at the top of the screen."
 edition = "2021"
 license = "MIT"
@@ -29,6 +29,9 @@ image = { version = "0.25", default-features = false, features = ["png", "bmp"] 
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-drag = "2"
+# No "zip" feature: it is only for macOS/Linux .tar.gz updates, and every zip 2.x was yanked.
+tauri-plugin-updater = { version = "2.14", default-features = false, features = ["native-tls"] }
+tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

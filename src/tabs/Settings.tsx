@@ -32,7 +32,7 @@ function Toggle({ title, subtitle, checked, onChange }: { title: string; subtitl
   );
 }
 
-export interface UpdateState { status: string; available: string | null; checking: boolean; check: () => void; }
+export interface UpdateState { status: string; available: string | null; checking: boolean; installing: boolean; check: () => void; install: () => void; }
 
 export function Settings({ prefs, setPrefs, jobs, update, replayTour }: {
   prefs: Prefs; setPrefs: (p: Prefs) => void; jobs: Jobs; update: UpdateState; replayTour: () => void;
@@ -123,13 +123,13 @@ export function Settings({ prefs, setPrefs, jobs, update, replayTour }: {
           <span className={`small ${update.available ? "green" : "muted"}`}>{update.status}</span>
           <div className="row-gap">
             {update.available
-              ? <button className="small-btn primary" onClick={() => void openSpecial("release")}>Descargar {update.available}</button>
+              ? <button className="small-btn primary" disabled={update.installing} onClick={update.install}>{update.installing ? "Actualizando…" : "Actualizar"}</button>
               : <button className="small-btn" disabled={update.checking} onClick={update.check}>{update.checking ? "Buscando…" : "Buscar ahora"}</button>}
           </div>
         </div>
         <Toggle
           title="Buscar actualizaciones automáticamente"
-          subtitle="Una vez al día, en GitHub. Nunca se instala nada sin que lo descargues tú."
+          subtitle="Una vez al día, en GitHub. Nunca se instala nada sin que pulses Actualizar."
           checked={prefs.autoUpdateCheck}
           onChange={(v) => { setPrefs({ ...prefs, autoUpdateCheck: v }); save("updateLastCheck", 0); }}
         />

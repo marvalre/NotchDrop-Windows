@@ -19,7 +19,8 @@ import { Convert } from "./tabs/Convert";
 import { Currency } from "./tabs/Currency";
 import { Settings, UpdateState } from "./tabs/Settings";
 import { Tour, TOUR_STEPS } from "./components/Tour";
-import { RELEASES_API, isNewer } from "./lib/version";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 
 export type Tab = "player" | "shelf" | "tools" | "notes" | "convert" | "currency" | "settings";
@@ -414,27 +415,51 @@ export default function App() {
   }, [now, ringingSince, stopRinging]);
   useEffect(() => { save("alarms", alarms.toJSON()); }, [alarms]);
 
-  // ── updates: once a day (if enabled) or on demand, tell when a newer release exists ──
-  const [update, setUpdate] = useState<{ status: string; available: string | null; checking: boolean }>({ status: "", available: null, checking: false });
+  // ── updates: once a day (if enabled) or on demand, via the signed latest.json of the newest
+  // GitHub release. The installer is verified against the public key built into the app before
+  // anything runs, and nothing installs until "Actualizar" is pressed (same rule as the Mac).
+  const [update, setUpdate] = useState<{ status: string; available: string | null; checking: boolean; installing: boolean }>({ status: "", available: null, checking: false, installing: false });
+  const pendingUpdate = useRef<Update | null>(null);
   const checkUpdates = useCallback(async (manual: boolean) => {
     setUpdate((u) => ({ ...u, checking: true }));
+    const current = await getVersion().catch(() => "?");
     try {
-      const current = await getVersion();
-      const res = await fetch(RELEASES_API, { headers: { Accept: "application/vnd.github+json" } });
-      if (res.status === 404) { setUpdate({ status: `Versión ${current} · aún no hay versiones publicadas`, available: null, checking: false }); return; }
-      if (res.status === 403 || res.status === 429) { setUpdate({ status: "GitHub limitó las consultas; inténtalo más tarde.", available: null, checking: false }); return; }
-      if (!res.ok) throw new Error(String(res.status));
-      const tag = String((await res.json())?.tag_name ?? "");
+      const u = await check();
       save("updateLastCheck", Date.now());
-      if (isNewer(tag, current)) {
-        const v = tag.replace(/^v/i, "");
-        setUpdate({ status: `Hay una versión nueva: ${v}`, available: v, checking: false });
-        if (!manual) try { sendNotification({ title: "NotchDrop", body: `Hay una versión nueva (${v}). Ábrela desde Ajustes → Actualizaciones.` }); } catch { /* ignore */ }
+      pendingUpdate.current = u;
+      if (u) {
+        setUpdate({ status: `Hay una versión nueva: ${u.version}`, available: u.version, checking: false, installing: false });
+        if (!manual) try { sendNotification({ title: "NotchDrop", body: `Hay una versión nueva (${u.version}). Instálala desde Ajustes → Actualizaciones.` }); } catch { /* ignore */ }
       } else {
-        setUpdate({ status: `Versión ${current} · estás al día`, available: null, checking: false });
+        setUpdate({ status: `Versión ${current} · estás al día`, available: null, checking: false, installing: false });
       }
-    } catch {
-      setUpdate({ status: "No se pudo buscar ahora (sin conexión).", available: null, checking: false });
+    } catch (e) {
+      const msg = String(e);
+      setUpdate({
+        status: /404|not found/i.test(msg) ? `Versión ${current} · aún no hay versiones con actualización automática`
+          : /signature/i.test(msg) ? "La actualización no pasó la verificación de firma; no se instaló nada."
+          : "No se pudo buscar ahora (sin conexión).",
+        available: null, checking: false, installing: false,
+      });
+    }
+  }, []);
+  const installUpdate = useCallback(async () => {
+    const u = pendingUpdate.current;
+    if (!u) return;
+    let total = 0, got = 0;
+    setUpdate((s) => ({ ...s, installing: true, status: `Descargando y verificando ${u.version}…` }));
+    try {
+      await u.downloadAndInstall((ev) => {
+        if (ev.event === "Started") total = ev.data.contentLength ?? 0;
+        if (ev.event === "Progress") {
+          got += ev.data.chunkLength;
+          if (total > 0) setUpdate((s) => ({ ...s, status: `Descargando y verificando ${u.version}… ${Math.round((got / total) * 100)} %` }));
+        }
+        if (ev.event === "Finished") setUpdate((s) => ({ ...s, status: "Instalando… NotchDrop se reiniciará." }));
+      });
+      await relaunch();
+    } catch (e) {
+      setUpdate((s) => ({ ...s, installing: false, status: /signature/i.test(String(e)) ? "La actualización no pasó la verificación de firma; no se instaló nada." : `No se pudo actualizar: ${String(e).slice(0, 120)}` }));
     }
   }, []);
   useEffect(() => {
@@ -447,7 +472,7 @@ export default function App() {
     const id = window.setInterval(tick, 3600 * 1000);
     return () => { clearTimeout(first); clearInterval(id); };
   }, [checkUpdates]);
-  const updateState: UpdateState = { ...update, check: () => void checkUpdates(true) };
+  const updateState: UpdateState = { ...update, check: () => void checkUpdates(true), install: () => void installUpdate() };
 
   useEffect(() => { if (!expanded) setTourStep(null); }, [expanded]);
 
